@@ -210,13 +210,11 @@ ssl_init(void)
 			    SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
 	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
 
-/*
 	if (SSL_CTX_use_certificate_file(ctx, SRFS_SERVER_PUBKEY,
 					 SSL_FILETYPE_PEM) != 1) {
 		printf("Couldn't read %s\n", SRFS_SERVER_PUBKEY);
 		exit(1);
 	}
-*/
 	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_SERVER_PRIVKEY,
 					SSL_FILETYPE_PEM) != 1) {
 		printf("Couldn't read %s\n", SRFS_SERVER_PRIVKEY);
@@ -227,7 +225,7 @@ ssl_init(void)
 int
 main(int argc, char *argv[])
 {
-	char *config = SRFS_CONFIG_FILE;
+	//char *config = SRFS_CONFIG_FILE;
 	uint64_t port = SRFS_PORT;
 	char *endptr = NULL;
 	int daemonize = 1;
@@ -260,7 +258,7 @@ main(int argc, char *argv[])
 		signal(SIGQUIT, SIG_IGN);
 		signal(SIGHUP, SIG_IGN);
 	}
-
+if (debug) { }
 	setproctitle("listener");
 
 	server_accept_loop();

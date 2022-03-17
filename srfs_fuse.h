@@ -27,6 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _CLIENT_FUSE_H
-#define _CLIENT_FUSE_H
+#ifndef _SRFS_FUSE_H
+#define _SRFS_FUSE_H
 #endif

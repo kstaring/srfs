@@ -38,17 +38,7 @@ typedef uint64_t srfs_id_t;	/* Every request has a unique ID
 				 * included by the response. */
 
 typedef enum {
-	SRFS_USERS = 0,	/* Client users and their uids are sent to the server,
-			 * as well as the groups on the client and
-			 * corresponding gids.
-			 * The server translates server ids to client ids
-			 * and vice verse. To do this, it needs this
-			 * information from the client. This is the first
-			 * action a client must perform after connecting */
-
 	SRFS_LOGIN,	/* Login a client user. */
-	SRFS_AUTH_KEYS,	/* Login a client user using their
-			 * authorized_keys file. */
 
 	SRFS_MOUNT,	/* Mount a remote filesystem / directory */
 
@@ -56,7 +46,7 @@ typedef enum {
 	SRFS_READDIR,	/* Read the next entry from the directory listing */
 	SRFS_CLOSEDIR,	/* Close the directory */
 
-	SRFS_STAT,	/* Get stat_t info */
+	SRFS_STAT,	/* Get file info */
 	SRFS_OPEN,	/* Open a file for reading or writing */
 	SRFS_READ,	/* Read data from a file */
 	SRFS_WRITE,	/* Write data to a file */

@@ -32,13 +32,16 @@
 
 #include "srfs_protocol.h"
 
-extern void server_init(void);
+extern void srfs_client_init(void);
 extern int srfs_connect(char *server_path);
+extern void srfs_disconnect(void);
 
 extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
 
 extern srfs_id_t srfs_request_id(void);
 extern int srfs_request(srfs_opcode_t opcode);
-extern int srfs_response();
+extern int srfs_response(void);
+
+extern int srfs_fd(void);
 
 #endif

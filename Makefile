@@ -1,12 +1,12 @@
-CFLAGS	=-Wall
+CFLAGS	=-g -O2 -Wall
 LDFLAGS	=-lssl -lcrypto
 
 FCLIENT	=srfs
 SERVER	=srfsd
 AUTH	=srfs_auth
 
-FCSRCS	=client_fuse.c srfs_client.c
-SSRCS	=server.c
+FCSRCS	=srfs_fuse.c srfs_client.c
+SSRCS	=srfs_server.c
 ASRCS	=srfs_auth.c
 
 all: fuse-client server authenticator
