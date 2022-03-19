@@ -27,241 +27,108 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <err.h>
-#include <poll.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <limits.h>
-#include <signal.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/wait.h>
 #include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <openssl/crypto.h>
 
-#include "srfs_config.h"
-#include "srfs_protocol.h"
+#include "srfs_server.h"
+#include "srfs_exports.h"
+#include "srfs_sock.h"
 
-static int main_daemon = 1;
-static int sock_fd;
+#define RESPONSE_SIZE(x) sizeof(srfs_response_t) + x
 
-static SSL_CTX *ctx = NULL;
-static SSL *ssl = NULL;
+static char *srfs_opcodes[] = {
+	"SRFS_MOUNT",
+	"SRFS_LOGIN",
+	"SRFS_OPENDIR",
+	"SRFS_CLOSEDIR",
+	"SRFS_READDIR",
+	"SRFS_STAT",
+	"SRFS_OPEN",
+	"SRFS_CLOSE",
+	"SRFS_READ",
+	"SRFS_WRITE"
+};
 
-static char *peername(struct sockaddr_storage *addr);
-static void server_listen(in_port_t port);
-static void server_accept(void);
-static void server_accept_loop(void);
-static void usage(char *prog);
-static void ssl_init(void);
-
-static char *
-peername(struct sockaddr_storage *addr)
+static srfs_response_t *
+srfs_response_fill(srfs_request_t *request, char *buf, size_t payload_size)
 {
-	static char res[INET6_ADDRSTRLEN + 1];
-	struct sockaddr_in6 *a6;
-	struct sockaddr_in *a4;
-	void *p;
+	srfs_response_t *res;
 
-	switch (addr->ss_family) {
-	case AF_INET:
-		a4 = (struct sockaddr_in *)addr;
-		p = &a4->sin_addr;
-		break;
-	case AF_INET6:
-		a6 = (struct sockaddr_in6 *)addr;
-		p = &a6->sin6_addr;
-		break;
-	default:
-		snprintf(res, INET6_ADDRSTRLEN, "ss_family unsupported: %d",
-			addr->ss_family);
-		return (res);
-	}
-	inet_ntop(addr->ss_family, p, res, INET6_ADDRSTRLEN);
+	res = (srfs_response_t *)buf;
+	res->request_id = request->request_id;
+	res->response_size = htons(payload_size);
 
 	return (res);
 }
 
 static void
-server_listen(in_port_t port)
+srfs_status_response(srfs_request_t *request, srfs_errno_t status)
 {
-	struct sockaddr_in6 addr;
-	int addrlen;
-	int opt;
+	char buf[RESPONSE_SIZE(sizeof(srfs_errno_t))];
+	srfs_errno_t *st;
 
-	if ((sock_fd = socket(AF_INET6, SOCK_STREAM, 0)) == -1)
-		err(1, "Couldn't create socket");
+	srfs_response_fill(request, buf, sizeof(uint16_t));
+	st = (srfs_errno_t *)((char *)buf + sizeof(srfs_response_t));
+	*st = htons(status);
 
-	opt = 1;
-	setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-	addrlen = sizeof(struct sockaddr_in6);
-	bzero(&addr, addrlen);
-	addr.sin6_family = AF_INET6;
-	addr.sin6_port = htons(port);
-	addr.sin6_addr = in6addr_any;
-
-	if (bind(sock_fd, (struct sockaddr *)&addr, addrlen) == -1) {
-		perror("bind() failed");
-		exit(1);
-	}
-
-	if (listen(sock_fd, 10) == -1) {
-		perror("listen() failed");
-		exit(1);
-	}
+	srfs_sock_write_sync(buf, sizeof(buf));
 }
 
 static void
-client_handle(void)
+srfs_not_implemented(srfs_request_t *request)
 {
-	char buf[1024];
-	int r;
-
-	if ((r = read(sock_fd, buf, 1024)) <= 0) {
-		close(sock_fd);
-		exit(0);
-	}
+	srfs_status_response(request, SRFS_ENOTSUP);
 }
 
 static void
-server_accept(void)
+srfs_invalid_opcode(srfs_request_t *request)
 {
-	struct sockaddr_storage a;
-	socklen_t len;
-	int fd;
-
-	// check config + pubkey
-
-	// then fork
-	if (fork() == 0) {
-		if ((fd = accept(sock_fd, (struct sockaddr *)&a, &len)) == -1) {
-			perror("accept() failed");
-			exit(1);
-		}
-		main_daemon = 0;
-		close(sock_fd);
-		sock_fd = fd;
-
-		setproctitle("handler %s", peername(&a));
-		printf("gotten connection from %s\n", peername(&a));
-
-		ssl = SSL_new(ctx);
-		SSL_set_fd(ssl, sock_fd);
-
-		if (SSL_accept(ssl) != 1) {
-			ERR_print_errors_fp(stdout);
-			exit(1);
-		}
-
-		SSL_write(ssl, SRFS_IDENT, strlen(SRFS_IDENT));
-	}
+	srfs_status_response(request, SRFS_EINVAL);
 }
 
 static void
-server_accept_loop(void)
+srfs_mount(srfs_request_t *request)
 {
-	struct pollfd pollfds[2];
-	int n;
+	char share[256];
+	srfs_export_t *export;
 
-	for (;;) {
-		pollfds[0].fd = sock_fd;
-		pollfds[0].events = POLLIN;
+	if (request->request_size > 255)
+		return srfs_status_response(request, SRFS_EINVAL);
 
-		if ((n = poll(pollfds, 1, 1000)) > 0) {
-			if (main_daemon) {
-				server_accept();
-				waitpid(-1, NULL, WNOHANG);
-			} else {
-				client_handle();
-			}
-		}
+	srfs_sock_read_sync(share, request->request_size);
+	share[request->request_size] = '\0';
+
+	if (!(export = srfs_export_by_sharename(share)))
+		return srfs_status_response(request, SRFS_ENOENT);
+
+	return srfs_status_response(request, SRFS_OK);
+}
+
+void
+srfs_request_handle(srfs_request_t *request)
+{
+	request->request_size = ntohs(request->request_size);
+	request->opcode = ntohs(request->opcode);
+
+	switch (request->opcode) {
+	case SRFS_MOUNT: return srfs_mount(request);
+	case SRFS_LOGIN: return srfs_not_implemented(request);
+	case SRFS_OPENDIR: return srfs_not_implemented(request);
+	case SRFS_CLOSEDIR: return srfs_not_implemented(request);
+	case SRFS_READDIR: return srfs_not_implemented(request);
+	case SRFS_STAT: return srfs_not_implemented(request);
+	case SRFS_OPEN: return srfs_not_implemented(request);
+	case SRFS_CLOSE: return srfs_not_implemented(request);
+	case SRFS_READ: return srfs_not_implemented(request);
+	case SRFS_WRITE: return srfs_not_implemented(request);
+	default: return srfs_invalid_opcode(request);
 	}
 }
 
-static void
-usage(char *prog)
+char *
+srfs_opcode(srfs_opcode_t opcode)
 {
-	printf("Usage: %s [-f] [-d] [-p port]\n\n", prog);
-	exit(1);
-}
+	if (opcode >= SRFS_OPCODE_MAX)
+		return ("INVALID OPCODE");
 
-static void
-ssl_init(void)
-{
-	OpenSSL_add_all_algorithms();
-	OpenSSL_add_all_ciphers();
-	ERR_load_crypto_strings();
-	SSL_load_error_strings();
-
-	if (SSL_library_init() < 0) {
-		printf("Couldn't init SSL\n");
-		exit(1);
-	}
-
-	ctx = SSL_CTX_new(TLS_server_method());
-	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
-			    SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
-	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
-
-	if (SSL_CTX_use_certificate_file(ctx, SRFS_SERVER_PUBKEY,
-					 SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_SERVER_PUBKEY);
-		exit(1);
-	}
-	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_SERVER_PRIVKEY,
-					SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_SERVER_PRIVKEY);
-		exit(1);
-	}
-}
-
-int
-main(int argc, char *argv[])
-{
-	//char *config = SRFS_CONFIG_FILE;
-	uint64_t port = SRFS_PORT;
-	char *endptr = NULL;
-	int daemonize = 1;
-	int debug = 0;
-	int ch;
-
-	while ((ch = getopt(argc, argv, "fdp:c:")) != -1) {
-		switch (ch) {
-		case 'f': daemonize = 0; break;
-		case 'd': debug = 1; break;
-		case 'p':
-			port = strtol(optarg, &endptr, 10);
-			if (endptr == NULL || *endptr != '\0' || port == 0 ||
-			    port >= IPPORT_MAX)
-				err(1, "illegal port: %s\n\n", optarg);
-			break;
-		default: usage(argv[0]); break;
-		}
-	}
-	argc -= optind;
-	argv += optind;
-
-	ssl_init();
-	server_listen(port);
-
-	if (daemonize) {
-		if (daemon(0, 0) != 0)
-			err(1, "Couldn't daemonize");
-		signal(SIGINT, SIG_IGN);
-		signal(SIGQUIT, SIG_IGN);
-		signal(SIGHUP, SIG_IGN);
-	}
-if (debug) { }
-	setproctitle("listener");
-
-	server_accept_loop();
-
-	return (0);
+	return srfs_opcodes[opcode];
 }

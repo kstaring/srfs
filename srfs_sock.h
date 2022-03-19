@@ -27,13 +27,30 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_REQUEST_H
-#define _SRFS_REQUEST_H
+#ifndef _SRFS_SOCK_H
+#define _SRFS_SOCK_H
 
-#include "srfs_protocol.h"
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
-extern void srfs_request_handle(srfs_request_t *request);
+extern char *peername(struct sockaddr_storage *addr);
 
-extern char *srfs_opcode(srfs_opcode_t opcode);
+extern int srfs_sock_server_init(void);
+extern int srfs_sock_client_init(void);
+
+extern void srfs_server_listen(in_port_t port);
+extern void srfs_accept_client(void);
+
+extern int srfs_sock_connect(char *server);
+
+extern ssize_t srfs_sock_read_sync(char *buf, size_t size);
+extern ssize_t srfs_sock_write_sync(char *buf, size_t size);
+
+extern size_t srfs_sock_pending(void);
+extern int srfs_sock_fd(void);
+
+extern void srfs_sock_close(void);
 
 #endif

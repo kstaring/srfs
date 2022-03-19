@@ -29,109 +29,76 @@
 
 #include <netdb.h>
 #include <unistd.h>
+#include <sys/endian.h>
 #include <string.h>
 #include <strings.h>
+#include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/crypto.h>
+
 #include "srfs_client.h"
+#include "srfs_sock.h"
 
-SSL_CTX *ctx = NULL;
-SSL *ssl = NULL;
+static srfs_id_t request_id;
 
-void
-srfs_client_init(void)
+static srfs_request_t *srfs_request_fill(srfs_request_t *request,
+	srfs_opcode_t opcode, srfs_size_t payload_size);
+
+static srfs_request_t *
+srfs_request_fill(srfs_request_t *request, srfs_opcode_t opcode,
+		  srfs_size_t payload_size)
 {
-	OpenSSL_add_all_algorithms();
-	ERR_load_BIO_strings();
-	ERR_load_crypto_strings();
-	SSL_load_error_strings();
+	request->request_id = htobe64(request_id);
+	request->opcode = htons(opcode);
+	request->request_size = htons(payload_size);
 
-	if (SSL_library_init() < 0) {
-		printf("couldn't init SSL\n");
-		exit(1);
-	}
-
-	ctx = SSL_CTX_new(TLS_client_method());
-	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
-			    SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
-	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
+	return (request);
 }
 
 int
-srfs_connect(char *server_path)
+srfs_mount(char *share)
 {
-	struct addrinfo hints, *res, *i;
-	char *server;
-	char *path;
-	char *sep;
-	char port[6];
-	char buf[9];
-	int fd;
+	char buf[sizeof(srfs_request_t) + 255];
+	uint16_t rbuf;
+	srfs_request_t *req;
+	srfs_response_t resp;
+	size_t len;
 
-	if (!(sep = index(server_path, ':')))
-		return (0);
-
-	*sep = '\0';
-
-	server = server_path;
-	path = sep + 1;
-	snprintf(port, 6, "%d", SRFS_PORT);
-
-	bzero(&hints, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	if (getaddrinfo(server, port, &hints, &res) != 0)
-		return (0);
-
-	for (fd = -1, i = res; i; i = i->ai_next) {
-		fd = socket(i->ai_family, i->ai_socktype, i->ai_protocol);
-		if (fd < 0)
-			continue;
-		if (connect(fd, i->ai_addr, i->ai_addrlen) == -1) {
-			close(fd);
-			continue;
-		}
-		
-		break;
-	}
-	freeaddrinfo(res);
-
-	if (fd == -1)
-		return (0);
-
-	ssl = SSL_new(ctx);
-	SSL_set_tlsext_host_name(ssl, server);
-	SSL_set_fd(ssl, fd);
-
-	if (SSL_connect(ssl) <= 0) {
-		srfs_disconnect();
+	if ((len = strlen(share)) > 255) {
+		errno = ENAMETOOLONG;
 		return (0);
 	}
 
-	bzero(buf, 9);
-	SSL_read(ssl, buf, 8);
+	req = (srfs_request_t *)buf;
+	srfs_request_fill(req, SRFS_MOUNT, strlen(share));
+	bcopy(share, buf + sizeof(srfs_request_t), len);
 
-	if (strcmp(buf, SRFS_IDENT) != 0) {
-		srfs_disconnect();
+	if (!srfs_sock_write_sync(buf, sizeof(srfs_request_t) + len))
+		return (0);
+
+	if (!srfs_sock_read_sync((char *)&resp, sizeof(srfs_response_t)))
+		return (0);
+
+	if (ntohs(resp.response_size) != 2)
+		return (0);
+
+	if (!srfs_sock_read_sync((char *)&rbuf, 2)) {
 		return (0);
 	}
 
 	return (1);
 }
 
-void
-srfs_disconnect(void)
+srfs_id_t
+srfs_request_id(void)
 {
-	SSL_shutdown(ssl);
-	SSL_free(ssl);
-	ssl = NULL;
-}
+	srfs_id_t res;
 
-int
-srfs_fd(void)
-{
-	return (SSL_get_fd(ssl));
+	res = request_id;
+	request_id++;
+
+	return (res);
 }

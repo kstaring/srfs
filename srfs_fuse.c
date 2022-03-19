@@ -29,40 +29,50 @@
 
 #define FUSE_USE_VERSION 30
 
+#include <err.h>
 #include <fuse.h>
 #include <poll.h>
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
 #include <signal.h>
+#include <arpa/inet.h>
 #include <fuse_opt.h>
 #include <fuse_lowlevel.h>
 
 #include "srfs_fuse.h"
+#include "srfs_sock.h"
 #include "srfs_client.h"
 
 static void sigint(int signal);
 _Noreturn static void srfs_usage(void);
-static int srfs_getattr(const char *path, struct stat *st);
-static int srfs_readdir(const char *path, void *buffer,
-			fuse_fill_dir_t filler, off_t offset,
-			struct fuse_file_info *fi);
-static int srfs_read(const char *path, char *buffer, size_t size,
-		     off_t offset, struct fuse_file_info *fi);
+
+static int srfs_fuse_getattr(const char *path, struct stat *st);
+static int srfs_fuse_opendir(const char *path, struct fuse_file_info *fi);
+static int srfs_fuse_releasedir(const char *path, struct fuse_file_info *fi);
+static int srfs_fuse_readdir(const char *path, void *buffer,
+			     fuse_fill_dir_t filler, off_t offset,
+			     struct fuse_file_info *fi);
+static int srfs_fuse_read(const char *path, char *buffer, size_t size,
+			  off_t offset, struct fuse_file_info *fi);
 
 /*static const struct fuse_opt opts[] = {
 	FUSE_OPT_END
 };*/
 
 static struct fuse_operations fops = {
-	.getattr = srfs_getattr,
-	.readdir = srfs_readdir,
-	.read = srfs_read
+	.getattr = srfs_fuse_getattr,
+	.opendir = srfs_fuse_opendir,
+	.releasedir = srfs_fuse_releasedir,
+	.readdir = srfs_fuse_readdir,
+	.read = srfs_fuse_read
 };
 
 static struct fuse *fuse = NULL;
 static struct fuse_chan *chan = NULL;
+static struct fuse_session *sess = NULL;
 static char *serverpath = NULL;
 static char *mountpoint = NULL;
 
@@ -84,22 +94,38 @@ srfs_usage(void)
 }
 
 static int
-srfs_getattr(const char *path, struct stat *st)
+srfs_fuse_getattr(const char *path, struct stat *st)
 {
+	return srfs_client_stat(path, st);
+}
+
+static int
+srfs_fuse_opendir(const char *path, struct fuse_file_info *fi)
+{
+printf("srfs_opendir %s!\n", path);
+	exit(0);
+}
+
+static int
+srfs_fuse_releasedir(const char *path, struct fuse_file_info *fi)
+{
+printf("srfs_releasedir %s!\n", path);
+	exit(0);
+}
+
+static int
+srfs_fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
+		  off_t offset, struct fuse_file_info *fi)
+{
+printf("srfs_readdir %s!\n", path);
 	return (0);
 }
 
 static int
-srfs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
-	     off_t offset, struct fuse_file_info *fi)
+srfs_fuse_read(const char *path, char *buffer, size_t size, off_t offset,
+	       struct fuse_file_info *fi)
 {
-	return (0);
-}
-
-static int
-srfs_read(const char *path, char *buffer, size_t size, off_t offset,
-	  struct fuse_file_info *fi)
-{
+printf("srfs_read %s!\n", path);
 	return (0);
 }
 
@@ -126,30 +152,83 @@ srfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 	return (1);
 }
 
-static void
-srfs_handle_fuse_event(void)
+static int
+fuse_event_handle(struct fuse_buf *connbuf, struct fuse_chan *ch)
 {
+	struct fuse_chan *tmp;
+	int res;
+
+	tmp = ch;
+	res = fuse_session_receive_buf(sess, connbuf, &tmp);
+
+	if (res == -EINTR)
+		return (1);
+	if (res <= 0)
+		return (0);
+
+	fuse_session_process_buf(sess, connbuf, tmp);
+
+	return (1);
 }
 
 static int
 srfs_fuse_loop(void)
 {
-	struct fuse_session *ses;
 	struct pollfd pollfds[2];
+	struct fuse_chan *ch;
+	size_t cbufsize;
+	char *cbuf;
 	int n;
 
-	pollfds[0].fd = fuse_chan_fd(chan);
-	pollfds[0].events = POLLIN;
+	ch = fuse_session_next_chan(sess, NULL);
+	cbufsize = fuse_chan_bufsize(ch);
+	cbuf = malloc(cbufsize);
 
-	ses = fuse_get_session(fuse);
-	while (!fuse_session_exited(ses)) {
+	while (!fuse_session_exited(sess)) {
+		struct fuse_buf connbuf = {
+			.mem = cbuf,
+			.size = cbufsize
+		};
+
+		pollfds[0].fd = fuse_chan_fd(chan);
+		pollfds[0].events = POLLIN;
+
 		if ((n = poll(pollfds, 1, 1000)) > 0) {
-			if (pollfds[0].revents & POLLIN)
-				srfs_handle_fuse_event();
+			if (pollfds[0].revents & POLLIN) {
+				if (!fuse_event_handle(&connbuf, ch))
+					break;
+			}
 		}
 	}
 
-	return (0);
+	free(cbuf);
+	fuse_session_reset(sess);
+
+	return (1);
+}
+
+int
+srfs_connect(char *server_path)
+{
+	char *server;
+	char *path;
+	char *sep;
+
+	if (!(sep = index(server_path, ':')))
+		return (0);
+
+	*sep = '\0';
+
+	server = server_path;
+	path = sep + 1;
+
+	if (!srfs_sock_connect(server))
+		err(errno, "Couldn't connect to server %s\n", server);
+
+	if (!srfs_mount(path))
+		err(0, "Couldn't mount\n");
+
+	return (1);
 }
 
 int
@@ -163,7 +242,9 @@ main(int argc, char *argv[])
 	if (!serverpath || !mountpoint)
 		srfs_usage();
 
-	srfs_client_init();
+	if (!srfs_sock_client_init())
+		return (1);
+
 	if (!srfs_connect(serverpath))
 		srfs_usage();
 
@@ -176,9 +257,12 @@ main(int argc, char *argv[])
 		return (1);
 	}
 
+	sess = fuse_get_session(fuse);
+
 	signal(SIGINT, sigint);
 
 	srfs_fuse_loop();
+//	fuse_loop(fuse);
 
 	fuse_unmount(mountpoint, chan);
 	fuse_destroy(fuse);

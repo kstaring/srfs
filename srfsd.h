@@ -27,13 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_REQUEST_H
-#define _SRFS_REQUEST_H
-
-#include "srfs_protocol.h"
-
-extern void srfs_request_handle(srfs_request_t *request);
-
-extern char *srfs_opcode(srfs_opcode_t opcode);
+#ifndef _SRFS_SRFSD_H
+#define _SRFS_SRFSD_H
 
 #endif

@@ -30,11 +30,11 @@ downsides, which include:
 - Network data is not encrypted, except when one uses NFSv4 krb5p, which
   obviously only works in combination with a complete Kerberos infrastructure.
 - User- and group IDs must be the same on client and server, except again
-  when one uses NFSv4.
+  when one uses Kerberized NFSv4.
 - NFSv4 is quite a bit less ubiquitous than previous versions, e.g.
   several of the BSDs did not implement this version, and at least OpenBSD
   did not implement version 4 on purpose.
 
 When Kerberization of one's infrastucture is overkill or not wanted, there
 are few options left. SSHFS has a tendency of locking up. And if Kerberization
-is overkill, then Andrew Filesystem or CEPH probably are as well.
+is overkill, then e.g. Andrew Filesystem or CEPH probably are as well.

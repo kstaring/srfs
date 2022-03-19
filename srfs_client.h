@@ -30,18 +30,18 @@
 #ifndef _SRFS_CLIENT_H
 #define _SRFS_CLIENT_H
 
+#include <sys/stat.h>
+
 #include "srfs_protocol.h"
 
-extern void srfs_client_init(void);
-extern int srfs_connect(char *server_path);
-extern void srfs_disconnect(void);
-
 extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
+
+extern int srfs_mount(char *share);
+
+extern int srfs_client_stat(const char *path, struct stat *st);
 
 extern srfs_id_t srfs_request_id(void);
 extern int srfs_request(srfs_opcode_t opcode);
 extern int srfs_response(void);
-
-extern int srfs_fd(void);
 
 #endif

@@ -27,13 +27,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_REQUEST_H
-#define _SRFS_REQUEST_H
+#ifndef _SRFS_EXPORTS_H
+#define _SRFS_EXPORTS_H
 
-#include "srfs_protocol.h"
+typedef struct srfs_export {
+	char *share;
+	char *localdir;
+} srfs_export_t;
 
-extern void srfs_request_handle(srfs_request_t *request);
+extern srfs_export_t **exports;
 
-extern char *srfs_opcode(srfs_opcode_t opcode);
+extern void srfs_exports_load(void);
+extern srfs_export_t *srfs_export_by_sharename(char *share);
 
 #endif
