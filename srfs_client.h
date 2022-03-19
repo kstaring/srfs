@@ -38,7 +38,7 @@ extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
 
 extern int srfs_mount(char *share);
 
-extern int srfs_client_stat(const char *path, struct stat *st);
+extern int srfs_client_stat(char *path, struct stat *st);
 
 extern srfs_id_t srfs_request_id(void);
 extern int srfs_request(srfs_opcode_t opcode);

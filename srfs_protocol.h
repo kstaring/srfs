@@ -36,6 +36,11 @@
 #define SRFS_IDENT "SRFS100"	/* SRFS identification string, sent upon
 				 * succesful connection by the server */
 
+#define SRFS_MAXSHARELEN 255	/* maximum length of a SRFS share name */
+#define SRFS_MAXPATHLEN	1024	/* maximum length of a full pathname */
+#define SRFS_MAXLOGNAMELEN 33	/* maximum length of a username incl NULL */
+#define SRFS_MAXGRPNAMELEN 33	/* maximum length of a group name incl NULL */
+
 /* SRFS opcodes */
 #define SRFS_MOUNT	0	/* Mount a remote filesystem / directory */
 
@@ -90,5 +95,37 @@ typedef struct __attribute__((__packed__)) srfs_response {
 	srfs_size_t response_size;
 	/* payload data... */
 } srfs_response_t;
+
+typedef uint16_t srfs_dev_t;
+typedef uint64_t srfs_ino_t;
+typedef uint16_t srfs_nlink_t;
+typedef uint16_t srfs_fflags_t;
+typedef uint64_t srfs_time_t;
+typedef uint32_t srfs_nsec_t;
+typedef uint64_t srfs_off_t;
+typedef uint32_t srfs_blksize_t;
+typedef uint64_t srfs_blkcnt_t;
+typedef uint16_t srfs_mode_t;
+
+typedef struct __attribute__((__packed__)) srfs_timespec {
+	srfs_time_t tv_sec;
+	srfs_nsec_t tv_nsec;
+} srfs_timespec_t;
+
+typedef struct __attribute__((__packed__)) srfs_stat {
+	srfs_ino_t st_ino;
+	srfs_off_t st_size;
+	srfs_blkcnt_t st_blocks;
+	struct srfs_timespec st_atim;
+	struct srfs_timespec st_mtim;
+	struct srfs_timespec st_ctim;
+	srfs_blksize_t st_blksize;
+	srfs_mode_t st_mode;
+	srfs_dev_t st_dev;
+	srfs_nlink_t st_nlink;
+	srfs_fflags_t st_flags;
+	srfs_size_t st_usrgrpsz;	/* size of trailing user & group str */
+	/* null-terminated user- and groupname... */
+} srfs_stat_t;
 
 #endif

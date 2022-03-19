@@ -96,7 +96,7 @@ srfs_usage(void)
 static int
 srfs_fuse_getattr(const char *path, struct stat *st)
 {
-	return srfs_client_stat(path, st);
+	return srfs_client_stat((char *)path, st);
 }
 
 static int

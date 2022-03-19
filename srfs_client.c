@@ -27,6 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <pwd.h>
+#include <grp.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/endian.h>
@@ -58,16 +60,52 @@ srfs_request_fill(srfs_request_t *request, srfs_opcode_t opcode,
 	return (request);
 }
 
+srfs_id_t
+srfs_request_id(void)
+{
+	srfs_id_t res;
+
+	res = request_id;
+	request_id++;
+
+	return (res);
+}
+
+int
+srfs_request_path(char *path, srfs_opcode_t opcode, char *rbuf, size_t bufsize)
+{
+	char buf[sizeof(srfs_request_t) + SRFS_MAXPATHLEN];
+	srfs_request_t *req;
+	size_t len;
+
+	if ((len = strlen(path)) > SRFS_MAXPATHLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
+
+	req = (srfs_request_t *)buf;
+	srfs_request_fill(req, opcode, strlen(path));
+	bcopy(path, buf + sizeof(srfs_request_t), len);
+
+	if (!srfs_sock_write_sync(buf, sizeof(srfs_request_t) + len))
+		return (0);
+
+	if (!srfs_sock_read_sync(rbuf, bufsize))
+		return (0);
+
+	return (1);
+}
+
 int
 srfs_mount(char *share)
 {
-	char buf[sizeof(srfs_request_t) + 255];
-	uint16_t rbuf;
+	char buf[sizeof(srfs_request_t) + SRFS_MAXSHARELEN];
 	srfs_request_t *req;
 	srfs_response_t resp;
+	uint16_t rbuf;
 	size_t len;
 
-	if ((len = strlen(share)) > 255) {
+	if ((len = strlen(share)) > SRFS_MAXSHARELEN) {
 		errno = ENAMETOOLONG;
 		return (0);
 	}
@@ -85,20 +123,75 @@ srfs_mount(char *share)
 	if (ntohs(resp.response_size) != 2)
 		return (0);
 
-	if (!srfs_sock_read_sync((char *)&rbuf, 2)) {
+	if (!srfs_sock_read_sync((char *)&rbuf, 2))
 		return (0);
-	}
 
 	return (1);
 }
 
-srfs_id_t
-srfs_request_id(void)
+int
+srfs_client_stat(char *path, struct stat *st)
 {
-	srfs_id_t res;
+	char usrgrpbuf[SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN];
+	struct passwd *pwd = NULL;
+	struct group *gr = NULL;
+	char *usrname, *grpname;
+	srfs_stat_t rst;
+	srfs_size_t len;
+	uid_t uid;
+	gid_t gid;
 
-	res = request_id;
-	request_id++;
+	if (!srfs_request_path(path, SRFS_STAT, (char *)&rst, sizeof(srfs_stat_t)))
+		return (0);
 
-	return (res);
+	len = ntohs(rst.st_usrgrpsz);
+	if (len < 4 || len > SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!srfs_sock_read_sync((char *)&usrgrpbuf, len))
+		return (0);
+
+	usrname = usrgrpbuf;
+	if (!(grpname = index(usrgrpbuf, '\0')))
+		return (0);
+	grpname++;
+	if (!strlen(usrname) || !strlen(grpname)) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!(pwd = getpwnam(usrname)))
+		pwd = getpwnam("nobody");
+	if (pwd)
+		uid = pwd->pw_uid;
+	else
+		uid = 65534;
+
+	if (!(gr = getgrnam(grpname)))
+		gr = getgrnam("nogroup");
+	if (gr)
+		gid = gr->gr_gid;
+	else
+		gid = 65533;
+
+	st->st_ino = be64toh(rst.st_ino);
+	st->st_size = be64toh(rst.st_size);
+	st->st_blocks = be64toh(rst.st_blocks);
+	st->st_atim.tv_sec = be64toh(rst.st_atim.tv_sec);
+	st->st_atim.tv_nsec = be32toh(rst.st_atim.tv_nsec);
+	st->st_mtim.tv_sec = be64toh(rst.st_mtim.tv_sec);
+	st->st_mtim.tv_nsec = be64toh(rst.st_mtim.tv_nsec);
+	st->st_ctim.tv_sec = be64toh(rst.st_ctim.tv_sec);
+	st->st_ctim.tv_nsec = be64toh(rst.st_ctim.tv_nsec);
+	st->st_blksize = be32toh(rst.st_blksize);
+	st->st_mode = htons(rst.st_mode);
+	st->st_dev = htons(rst.st_dev);
+	st->st_nlink = htons(rst.st_nlink);
+	st->st_flags = htons(rst.st_flags);
+	st->st_uid = uid;
+	st->st_gid = gid;
+
+	return (1);
 }
