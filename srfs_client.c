@@ -60,6 +60,31 @@ srfs_request_fill(srfs_request_t *request, srfs_opcode_t opcode,
 	return (request);
 }
 
+static void
+srfs_client_set_errno(srfs_errno_t status)
+{
+	switch (status) {
+	case SRFS_ENOENT:	errno = ENOENT; break;
+	case SRFS_EIO:		errno = EIO; break;
+	case SRFS_EBADF:	errno = EBADF; break;
+	case SRFS_EACCESS:	errno = EACCES; break;
+	case SRFS_EXIST:	errno = EEXIST; break;
+	case SRFS_ENOTDIR:	errno = ENOTDIR; break;
+	case SRFS_EISDIR:	errno = EISDIR; break;
+	case SRFS_EINVAL:	errno = EINVAL; break;
+	case SRFS_EINFILE:	errno = ENFILE; break;
+	case SRFS_ETXTBSY:	errno = ETXTBSY; break;
+	case SRFS_EFBIG:	errno = EFBIG; break;
+	case SRFS_ENOSPC:	errno = ENOSPC; break;
+	case SRFS_ESEEK:	errno = ESPIPE; break;
+	case SRFS_EROFS:	errno = EROFS; break;
+	case SRFS_EAGAIN:	errno = EAGAIN; break;
+	case SRFS_ENOTSUP:	errno = ENOTSUP; break;
+	case SRFS_ENAMETOOLONG: errno = ENAMETOOLONG; break;
+	default:		errno = EIO; break;
+	}
+}
+
 srfs_id_t
 srfs_request_id(void)
 {
@@ -76,6 +101,7 @@ srfs_request_path(char *path, srfs_opcode_t opcode, char *rbuf, size_t bufsize)
 {
 	char buf[sizeof(srfs_request_t) + SRFS_MAXPATHLEN];
 	srfs_request_t *req;
+	srfs_errno_t status;
 	size_t len;
 
 	if ((len = strlen(path)) > SRFS_MAXPATHLEN) {
@@ -89,6 +115,15 @@ srfs_request_path(char *path, srfs_opcode_t opcode, char *rbuf, size_t bufsize)
 
 	if (!srfs_sock_write_sync(buf, sizeof(srfs_request_t) + len))
 		return (0);
+
+	if (!srfs_sock_read_sync((char *)&status, sizeof(srfs_errno_t)))
+		return (0);
+
+	status = ntohs(status);
+	if (status != SRFS_OK) {
+		srfs_client_set_errno(status);
+		return (0);
+	}
 
 	if (!srfs_sock_read_sync(rbuf, bufsize))
 		return (0);
@@ -182,14 +217,14 @@ srfs_client_stat(char *path, struct stat *st)
 	st->st_atim.tv_sec = be64toh(rst.st_atim.tv_sec);
 	st->st_atim.tv_nsec = be32toh(rst.st_atim.tv_nsec);
 	st->st_mtim.tv_sec = be64toh(rst.st_mtim.tv_sec);
-	st->st_mtim.tv_nsec = be64toh(rst.st_mtim.tv_nsec);
+	st->st_mtim.tv_nsec = be32toh(rst.st_mtim.tv_nsec);
 	st->st_ctim.tv_sec = be64toh(rst.st_ctim.tv_sec);
-	st->st_ctim.tv_nsec = be64toh(rst.st_ctim.tv_nsec);
+	st->st_ctim.tv_nsec = be32toh(rst.st_ctim.tv_nsec);
 	st->st_blksize = be32toh(rst.st_blksize);
-	st->st_mode = htons(rst.st_mode);
-	st->st_dev = htons(rst.st_dev);
-	st->st_nlink = htons(rst.st_nlink);
-	st->st_flags = htons(rst.st_flags);
+	st->st_mode = ntohs(rst.st_mode);
+	st->st_dev = ntohs(rst.st_dev);
+	st->st_nlink = ntohs(rst.st_nlink);
+	st->st_flags = ntohs(rst.st_flags);
 	st->st_uid = uid;
 	st->st_gid = gid;
 

@@ -76,6 +76,7 @@
 #define SRFS_EROFS	30
 #define SRFS_EAGAIN	31
 #define SRFS_ENOTSUP	32
+#define SRFS_ENAMETOOLONG 33
 
 typedef uint64_t srfs_id_t;	/* Every request has a unique ID
 				 * included by the response. */
