@@ -46,17 +46,13 @@
 
 #define SRFS_LOGIN	1	/* Login a client user */
 
-#define SRFS_OPENDIR	2	/* Open a directory to read its listing */
-#define SRFS_CLOSEDIR	3	/* Close the directory */
-#define SRFS_READDIR	4	/* Read the next entry from the directory */
+#define SRFS_READDIR	2	/* Read the next entry from the directory */
 
-#define SRFS_STAT	5	/* Get file info */
-#define SRFS_OPEN	6	/* Open a file for reading or writing */
-#define SRFS_CLOSE	7	/* Close a file */
-#define SRFS_READ	8	/* Read data from a file */
-#define SRFS_WRITE	9	/* Write data to a file */
+#define SRFS_STAT	3	/* Get file info */
+#define SRFS_READ	4	/* Read data from a file */
+#define SRFS_WRITE	5	/* Write data to a file */
 
-#define SRFS_OPCODE_MAX	10	/* Defines the number of opcodes */
+#define SRFS_OPCODE_MAX	6	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0

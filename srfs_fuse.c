@@ -96,21 +96,21 @@ srfs_usage(void)
 static int
 srfs_fuse_getattr(const char *path, struct stat *st)
 {
-	return srfs_client_stat((char *)path, st);
+	return (srfs_client_stat((char *)path, st) ? 0 : -1);
 }
 
 static int
 srfs_fuse_opendir(const char *path, struct fuse_file_info *fi)
 {
-printf("srfs_opendir %s!\n", path);
-	exit(0);
+	errno = ENOSYS;
+	return (-1);
 }
 
 static int
 srfs_fuse_releasedir(const char *path, struct fuse_file_info *fi)
 {
-printf("srfs_releasedir %s!\n", path);
-	exit(0);
+	errno = ENOSYS;
+	return (-1);
 }
 
 static int
@@ -262,7 +262,6 @@ main(int argc, char *argv[])
 	signal(SIGINT, sigint);
 
 	srfs_fuse_loop();
-//	fuse_loop(fuse);
 
 	fuse_unmount(mountpoint, chan);
 	fuse_destroy(fuse);

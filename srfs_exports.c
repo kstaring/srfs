@@ -68,8 +68,8 @@ exports_parse_line(char *line, int line_nr, int *exportidx)
 
 	if (i == 2) {
 		export = malloc(sizeof(srfs_export_t));
-		export->share = share;
-		export->localdir = localdir;
+		export->share = strdup(share);
+		export->localdir = strdup(localdir);
 
 		if (*exportidx == exportsize) {
 			exportsize += 10;

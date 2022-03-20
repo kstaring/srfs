@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/endian.h>
@@ -48,18 +49,14 @@
 static char *srfs_opcodes[] = {
 	"SRFS_MOUNT",
 	"SRFS_LOGIN",
-	"SRFS_OPENDIR",
-	"SRFS_CLOSEDIR",
 	"SRFS_READDIR",
 	"SRFS_STAT",
-	"SRFS_OPEN",
-	"SRFS_CLOSE",
 	"SRFS_READ",
 	"SRFS_WRITE"
 };
 
 /* TODO only temporary, POC */
-static srfs_export_t *exported;
+static srfs_export_t *exported = NULL;
 
 static int
 srfs_localpath(srfs_export_t *export, char *path, char *dstpath)
@@ -146,12 +143,14 @@ srfs_errno_response(srfs_request_t *request)
 static void
 srfs_not_implemented(srfs_request_t *request)
 {
+printf("not implemented! %d\n", ntohs(request->opcode));
 	srfs_status_response(request, SRFS_ENOTSUP);
 }
 
 static void
 srfs_invalid_opcode(srfs_request_t *request)
 {
+printf("invalid opcode! %d\n", ntohs(request->opcode));
 	srfs_status_response(request, SRFS_EINVAL);
 }
 
@@ -172,6 +171,7 @@ srfs_mount(srfs_request_t *request)
 
 	exported = export;
 
+	printf("mounted %s\n", export->share);
 	return (srfs_status_response(request, SRFS_OK));
 }
 
@@ -222,23 +222,26 @@ srfs_stat(srfs_request_t *request)
 	strncpy(usrgrpbuf + ulen + 1, grpname, glen);
 	usrgrpbuf[ulen + glen + 1] = '\0';
 
-	rst->st_ino = htobe64(rst->st_ino);
-	rst->st_size = htobe64(rst->st_size);
-	rst->st_blocks = htobe64(rst->st_blocks);
-	rst->st_atim.tv_sec = htobe64(rst->st_atim.tv_sec);
-	rst->st_atim.tv_nsec = htobe32(rst->st_atim.tv_nsec);
-	rst->st_mtim.tv_sec = htobe64(rst->st_mtim.tv_sec);
-	rst->st_mtim.tv_nsec = htobe32(rst->st_mtim.tv_nsec);
-	rst->st_ctim.tv_sec = htobe64(rst->st_ctim.tv_sec);
-	rst->st_ctim.tv_nsec = htobe32(rst->st_ctim.tv_nsec);
-	rst->st_blksize = htobe32(rst->st_blksize);
-	rst->st_mode = htons(rst->st_mode);
-	rst->st_dev = htons(rst->st_dev);
-	rst->st_nlink = htons(rst->st_nlink);
-	rst->st_flags = htons(rst->st_flags);
-	rst->st_usrgrpsz = ulen + glen + 2;
+	rst->st_ino = htobe64(st.st_ino);
+	rst->st_size = htobe64(st.st_size);
+	rst->st_blocks = htobe64(st.st_blocks);
+	rst->st_atim.tv_sec = htobe64(st.st_atim.tv_sec);
+	rst->st_atim.tv_nsec = htobe32(st.st_atim.tv_nsec);
+	rst->st_mtim.tv_sec = htobe64(st.st_mtim.tv_sec);
+	rst->st_mtim.tv_nsec = htobe32(st.st_mtim.tv_nsec);
+	rst->st_ctim.tv_sec = htobe64(st.st_ctim.tv_sec);
+	rst->st_ctim.tv_nsec = htobe32(st.st_ctim.tv_nsec);
+	rst->st_blksize = htobe32(st.st_blksize);
+	rst->st_mode = htons(st.st_mode);
+	rst->st_dev = htons(st.st_dev);
+	rst->st_nlink = htons(st.st_nlink);
+	rst->st_flags = htons(st.st_flags);
+	rst->st_usrgrpsz = htons(ulen + glen + 2);
 
-	*status = SRFS_OK;
+	*status = htons(SRFS_OK);
+
+	printf("stat(%s): usr=%s grp=%s sz=%ld mode=%d\n", path,
+	       usrname, grpname, st.st_size, st.st_mode & 0777);
 
 	srfs_sock_write_sync(rbuf, sizeof(rbuf));
 }
@@ -252,12 +255,8 @@ srfs_request_handle(srfs_request_t *request)
 	switch (request->opcode) {
 	case SRFS_MOUNT: return srfs_mount(request);
 	case SRFS_LOGIN: return srfs_not_implemented(request);
-	case SRFS_OPENDIR: return srfs_not_implemented(request);
-	case SRFS_CLOSEDIR: return srfs_not_implemented(request);
 	case SRFS_READDIR: return srfs_not_implemented(request);
 	case SRFS_STAT: return srfs_stat(request);
-	case SRFS_OPEN: return srfs_not_implemented(request);
-	case SRFS_CLOSE: return srfs_not_implemented(request);
 	case SRFS_READ: return srfs_not_implemented(request);
 	case SRFS_WRITE: return srfs_not_implemented(request);
 	default: return srfs_invalid_opcode(request);
