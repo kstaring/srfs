@@ -36,10 +36,12 @@
 #define SRFS_IDENT "SRFS100"	/* SRFS identification string, sent upon
 				 * succesful connection by the server */
 
-#define SRFS_MAXSHARELEN 255	/* maximum length of a SRFS share name */
+#define SRFS_MAXNAMLEN 255	/* maximum length of share and filename */
 #define SRFS_MAXPATHLEN	1024	/* maximum length of a full pathname */
 #define SRFS_MAXLOGNAMELEN 33	/* maximum length of a username incl NULL */
 #define SRFS_MAXGRPNAMELEN 33	/* maximum length of a group name incl NULL */
+
+#define SRFS_READDIR_BUFSZ 1024	/* default size of READDIR buffer size */ 
 
 /* SRFS opcodes */
 #define SRFS_MOUNT	0	/* Mount a remote filesystem / directory */
@@ -52,7 +54,9 @@
 #define SRFS_READ	4	/* Read data from a file */
 #define SRFS_WRITE	5	/* Write data to a file */
 
-#define SRFS_OPCODE_MAX	6	/* Defines the number of opcodes */
+#define SRFS_ACCESS	6	/* Check file access */
+
+#define SRFS_OPCODE_MAX	7	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0
@@ -81,15 +85,16 @@ typedef uint16_t srfs_opcode_t;	/* request opcode */
 typedef uint16_t srfs_errno_t;	/* error code */
 
 typedef struct __attribute__((__packed__)) srfs_request {
-	srfs_id_t request_id;
-	srfs_size_t request_size;
-	srfs_opcode_t opcode;
+	srfs_id_t r_serial;
+	srfs_size_t r_size;
+	srfs_opcode_t r_opcode;
 	/* payload data... */
 } srfs_request_t;
 
 typedef struct __attribute__((__packed__)) srfs_response {
-	srfs_id_t request_id;
-	srfs_size_t response_size;
+	srfs_id_t r_serial;
+	srfs_size_t r_size;
+	srfs_errno_t r_errno;
 	/* payload data... */
 } srfs_response_t;
 
@@ -124,5 +129,10 @@ typedef struct __attribute__((__packed__)) srfs_stat {
 	srfs_size_t st_usrgrpsz;	/* size of trailing user & group str */
 	/* null-terminated user- and groupname... */
 } srfs_stat_t;
+
+typedef struct srfs_dirent {
+	uint8_t d_type;
+	char d_name[SRFS_MAXNAMLEN + 1];
+} srfs_dirent_t;
 
 #endif

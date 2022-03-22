@@ -27,27 +27,16 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_CLIENT_H
-#define _SRFS_CLIENT_H
+#ifndef _SRFS_USRGRP_H
+#define _SRFS_USRGRP_H
 
-#include <sys/stat.h>
+#include <pwd.h>
+#include <grp.h>
 
-#include "srfs_protocol.h"
+extern char *srfs_namebyuid(uid_t uid);
+extern uid_t srfs_uidbyname(char *usrname);
 
-typedef struct srfs_dirlist srfs_dirlist_t;
-
-extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
-
-extern int srfs_mount(char *share);
-
-extern int srfs_client_stat(char *path, struct stat *st);
-
-extern srfs_dirlist_t *srfs_client_opendir(char *path, off_t offset);
-extern srfs_dirent_t *srfs_client_readdir(srfs_dirlist_t *dirlist);
-extern void srfs_client_closedir(srfs_dirlist_t *dirlist);
-
-extern srfs_id_t srfs_serial(void);
-extern int srfs_request(srfs_opcode_t opcode);
-extern int srfs_response(void);
+extern char *srfs_namebygid(gid_t gid);
+extern uid_t srfs_gidbyname(char *grpname);
 
 #endif

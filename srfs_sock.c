@@ -192,7 +192,7 @@ srfs_sock_read_sync(char *buf, size_t size)
 
 	for (res = 0; res < size; res += r) {
 		r = SSL_read(ssl, buf, size);
-		if (r <= 0)
+		if (r <= 0 && r != EINTR)
 			return (-1);
 	}
 
@@ -206,7 +206,7 @@ srfs_sock_write_sync(char *buf, size_t size)
 
 	for (res = 0; res < size; res += w) {
 		w = SSL_write(ssl, buf, size);
-		if (w <= 0)
+		if (w <= 0 && w != EINTR)
 			return (-1);
 	}
 

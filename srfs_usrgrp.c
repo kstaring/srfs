@@ -27,27 +27,57 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_CLIENT_H
-#define _SRFS_CLIENT_H
+#include <string.h>
 
-#include <sys/stat.h>
-
+#include "srfs_usrgrp.h"
 #include "srfs_protocol.h"
 
-typedef struct srfs_dirlist srfs_dirlist_t;
+char *
+srfs_namebyuid(uid_t uid)
+{
+	struct passwd *pwd;
 
-extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
+	if ((pwd = getpwuid(uid)))
+		if (strlen(pwd->pw_name) < SRFS_MAXLOGNAMELEN)
+			return (pwd->pw_name);
 
-extern int srfs_mount(char *share);
+	return ("nobody");
+}
 
-extern int srfs_client_stat(char *path, struct stat *st);
+uid_t
+srfs_uidbyname(char *usrname)
+{
+	struct passwd *pwd;
 
-extern srfs_dirlist_t *srfs_client_opendir(char *path, off_t offset);
-extern srfs_dirent_t *srfs_client_readdir(srfs_dirlist_t *dirlist);
-extern void srfs_client_closedir(srfs_dirlist_t *dirlist);
+	if (!(pwd = getpwnam(usrname)))
+		pwd = getpwnam("nobody");
 
-extern srfs_id_t srfs_serial(void);
-extern int srfs_request(srfs_opcode_t opcode);
-extern int srfs_response(void);
+	if (pwd)
+		return (pwd->pw_uid);
 
-#endif
+	return (65534);
+}
+
+char *srfs_namebygid(gid_t gid)
+{
+	struct group *grp;
+
+	if ((grp = getgrgid(gid)))
+		if (strlen(grp->gr_name) < SRFS_MAXGRPNAMELEN)
+			return (grp->gr_name);
+
+	return ("nogroup");
+}
+
+uid_t srfs_gidbyname(char *grpname)
+{
+	struct group *grp;
+
+	if (!(grp = getgrnam(grpname)))
+		grp = getgrnam("nogroup");
+
+	if (grp)
+		return (grp->gr_gid);
+
+	return (65533);
+}

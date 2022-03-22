@@ -38,6 +38,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <signal.h>
+#include <dirent.h>
 #include <arpa/inet.h>
 #include <fuse_opt.h>
 #include <fuse_lowlevel.h>
@@ -96,28 +97,39 @@ srfs_usage(void)
 static int
 srfs_fuse_getattr(const char *path, struct stat *st)
 {
-	return (srfs_client_stat((char *)path, st) ? 0 : -1);
+	return (srfs_client_stat((char *)path, st) ? 0 : -errno);
 }
 
 static int
 srfs_fuse_opendir(const char *path, struct fuse_file_info *fi)
 {
-	errno = ENOSYS;
-	return (-1);
+	return (0);
 }
 
 static int
 srfs_fuse_releasedir(const char *path, struct fuse_file_info *fi)
 {
-	errno = ENOSYS;
-	return (-1);
+	return (0);
 }
 
 static int
 srfs_fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
 		  off_t offset, struct fuse_file_info *fi)
 {
-printf("srfs_readdir %s!\n", path);
+	srfs_dirlist_t *list;
+	srfs_dirent_t *item;
+	struct stat st = { 0 };
+
+	errno = 0;
+	if ((list = srfs_client_opendir((char *)path, offset))) {
+		while ((item = srfs_client_readdir(list))) {
+			st.st_mode = DTTOIF(item->d_type);
+			filler(buffer, item->d_name, &st, 0);
+			offset++;
+		}
+	}
+	srfs_client_closedir(list);
+
 	return (0);
 }
 

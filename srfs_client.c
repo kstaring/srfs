@@ -27,8 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <pwd.h>
-#include <grp.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/endian.h>
@@ -42,28 +40,78 @@
 #include <openssl/crypto.h>
 
 #include "srfs_client.h"
+#include "srfs_usrgrp.h"
+#include "srfs_iobuf.h"
 #include "srfs_sock.h"
 
-static srfs_id_t request_id;
+typedef struct srfs_dirlist {
+	char listbuf[SRFS_READDIR_BUFSZ];
+	char *ptr;
+	size_t count;
+	size_t idx;
+} srfs_dirlist_t;
 
-static srfs_request_t *srfs_request_fill(srfs_request_t *request,
-	srfs_opcode_t opcode, srfs_size_t payload_size);
+static srfs_id_t serial;
 
-static srfs_request_t *
-srfs_request_fill(srfs_request_t *request, srfs_opcode_t opcode,
-		  srfs_size_t payload_size)
+static void srfs_requesthdr_fill(srfs_iobuf_t *r, srfs_opcode_t opcode);
+
+static void
+srfs_requesthdr_fill(srfs_iobuf_t *r, srfs_opcode_t opcode)
 {
-	request->request_id = htobe64(request_id);
-	request->opcode = htons(opcode);
-	request->request_size = htons(payload_size);
+	srfs_request_t *req;
 
-	return (request);
+	req = SRFS_IOBUF_REQUEST(r);
+	req->r_serial = htobe64(serial);
+	req->r_opcode = htons(opcode);
+	req->r_size = 0;
+	r->ptr += sizeof(srfs_request_t);
+}
+
+static int
+srfs_request_fill_path(srfs_iobuf_t *req, srfs_opcode_t opcode, char *path)
+{
+	size_t len;
+
+	if ((len = strlen(path)) > SRFS_MAXPATHLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
+
+	SRFS_IOBUF_INIT(req);
+	srfs_requesthdr_fill(req, opcode);
+	srfs_iobuf_addstr(req, path);
+
+	return (1);
 }
 
 static void
-srfs_client_set_errno(srfs_errno_t status)
+srfs_request_finalize(srfs_iobuf_t *req)
 {
-	switch (status) {
+	srfs_request_t *r;
+	uint16_t size;
+
+	r = SRFS_IOBUF_REQUEST(req);
+
+	size = SRFS_IOBUF_SIZE(req) - sizeof(srfs_request_t);
+	r->r_size = htons(size);
+	req->size = SRFS_IOBUF_SIZE(req);
+}
+
+static int
+srfs_request_send(srfs_iobuf_t *req)
+{
+	srfs_request_finalize(req);
+
+	if (!srfs_sock_write_sync(req->buf, SRFS_IOBUF_SIZE(req)))
+		return (0);
+
+	return (1);
+}
+
+static void
+srfs_client_set_errno(srfs_errno_t err)
+{
+	switch (err) {
 	case SRFS_ENOENT:	errno = ENOENT; break;
 	case SRFS_EIO:		errno = EIO; break;
 	case SRFS_EBADF:	errno = EBADF; break;
@@ -86,46 +134,61 @@ srfs_client_set_errno(srfs_errno_t status)
 }
 
 srfs_id_t
-srfs_request_id(void)
+srfs_serial(void)
 {
 	srfs_id_t res;
 
-	res = request_id;
-	request_id++;
+	res = serial;
+	serial++;
 
 	return (res);
 }
 
-int
-srfs_request_path(char *path, srfs_opcode_t opcode, char *rbuf, size_t bufsize)
+static int
+srfs_client_read_response(srfs_iobuf_t *resp)
 {
-	char buf[sizeof(srfs_request_t) + SRFS_MAXPATHLEN];
-	srfs_request_t *req;
-	srfs_errno_t status;
-	size_t len;
+	srfs_response_t *r;
 
-	if ((len = strlen(path)) > SRFS_MAXPATHLEN) {
-		errno = ENAMETOOLONG;
+	SRFS_IOBUF_INIT(resp);
+	if (!srfs_sock_read_sync(resp->buf, sizeof(srfs_response_t)))
+		return (0);
+
+	r = SRFS_IOBUF_RESPONSE(resp);
+	r->r_errno = ntohs(r->r_errno);
+	r->r_size = ntohs(r->r_size);
+	if (r->r_errno != SRFS_OK) {
+		srfs_client_set_errno(r->r_errno);
 		return (0);
 	}
 
-	req = (srfs_request_t *)buf;
-	srfs_request_fill(req, opcode, strlen(path));
-	bcopy(path, buf + sizeof(srfs_request_t), len);
-
-	if (!srfs_sock_write_sync(buf, sizeof(srfs_request_t) + len))
-		return (0);
-
-	if (!srfs_sock_read_sync((char *)&status, sizeof(srfs_errno_t)))
-		return (0);
-
-	status = ntohs(status);
-	if (status != SRFS_OK) {
-		srfs_client_set_errno(status);
+	if (r->r_size > resp->size - sizeof(srfs_response_t)) {
+		errno = EMSGSIZE;
 		return (0);
 	}
 
-	if (!srfs_sock_read_sync(rbuf, bufsize))
+	if (r->r_size) {
+		resp->ptr = resp->buf + sizeof(srfs_response_t);
+		if (!srfs_sock_read_sync(resp->ptr, r->r_size))
+			return (0);
+
+		resp->size = sizeof(srfs_response_t) + r->r_size;
+	} else {
+		resp->size = 0;
+	}
+
+	return (1);
+}
+
+int
+srfs_request_path(char *path, srfs_opcode_t opcode,
+		  srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	if (!srfs_request_fill_path(req, opcode, path))
+		return (0);
+	if (!srfs_request_send(req))
+		return (0);
+
+	if (!srfs_client_read_response(resp))
 		return (0);
 
 	return (1);
@@ -134,32 +197,28 @@ srfs_request_path(char *path, srfs_opcode_t opcode, char *rbuf, size_t bufsize)
 int
 srfs_mount(char *share)
 {
-	char buf[sizeof(srfs_request_t) + SRFS_MAXSHARELEN];
-	srfs_request_t *req;
-	srfs_response_t resp;
-	uint16_t rbuf;
+	srfs_iobuf_t req, resp;
 	size_t len;
 
-	if ((len = strlen(share)) > SRFS_MAXSHARELEN) {
+	if ((len = strlen(share)) > SRFS_MAXNAMLEN) {
 		errno = ENAMETOOLONG;
 		return (0);
 	}
 
-	req = (srfs_request_t *)buf;
-	srfs_request_fill(req, SRFS_MOUNT, strlen(share));
-	bcopy(share, buf + sizeof(srfs_request_t), len);
+	SRFS_IOBUF_INIT(&req);
+	srfs_requesthdr_fill(&req, SRFS_MOUNT);
+	srfs_iobuf_addstr(&req, share);
 
-	if (!srfs_sock_write_sync(buf, sizeof(srfs_request_t) + len))
+	if (!srfs_request_send(&req))
 		return (0);
 
-	if (!srfs_sock_read_sync((char *)&resp, sizeof(srfs_response_t)))
+	if (!srfs_client_read_response(&resp))
 		return (0);
 
-	if (ntohs(resp.response_size) != 2)
+	if (SRFS_IOBUF_LEFT(&resp) != 0) {
+		errno = EINVAL;
 		return (0);
-
-	if (!srfs_sock_read_sync((char *)&rbuf, 2))
-		return (0);
+	}
 
 	return (1);
 }
@@ -167,26 +226,40 @@ srfs_mount(char *share)
 int
 srfs_client_stat(char *path, struct stat *st)
 {
-	char usrgrpbuf[SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN];
-	struct passwd *pwd = NULL;
-	struct group *gr = NULL;
 	char *usrname, *grpname;
-	srfs_stat_t rst;
+	srfs_iobuf_t req, resp;
+	srfs_response_t *r;
+	srfs_stat_t *rst;
+	char *usrgrpbuf;
 	srfs_size_t len;
 	uid_t uid;
 	gid_t gid;
 
-	if (!srfs_request_path(path, SRFS_STAT, (char *)&rst, sizeof(srfs_stat_t)))
+	if (!srfs_request_path(path, SRFS_STAT, &req, &resp))
 		return (0);
 
-	len = ntohs(rst.st_usrgrpsz);
+	r = SRFS_IOBUF_RESPONSE(&resp);
+	len = sizeof(srfs_stat_t) + 4;
+	if (r->r_size < len) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!(rst = (srfs_stat_t *)srfs_iobuf_getptr(&resp, sizeof(srfs_stat_t)))) {
+		errno = EIO;
+		return (0);
+	}
+
+	len = ntohs(rst->st_usrgrpsz);
 	if (len < 4 || len > SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN) {
 		errno = EIO;
 		return (0);
 	}
 
-	if (!srfs_sock_read_sync((char *)&usrgrpbuf, len))
+	if (!(usrgrpbuf = srfs_iobuf_getptr(&resp, len))) {
+		errno = EIO;
 		return (0);
+	}
 
 	usrname = usrgrpbuf;
 	if (!(grpname = index(usrgrpbuf, '\0')))
@@ -197,36 +270,91 @@ srfs_client_stat(char *path, struct stat *st)
 		return (0);
 	}
 
-	if (!(pwd = getpwnam(usrname)))
-		pwd = getpwnam("nobody");
-	if (pwd)
-		uid = pwd->pw_uid;
-	else
-		uid = 65534;
+	uid = srfs_uidbyname(usrname);
+	gid = srfs_gidbyname(grpname);
 
-	if (!(gr = getgrnam(grpname)))
-		gr = getgrnam("nogroup");
-	if (gr)
-		gid = gr->gr_gid;
-	else
-		gid = 65533;
-
-	st->st_ino = be64toh(rst.st_ino);
-	st->st_size = be64toh(rst.st_size);
-	st->st_blocks = be64toh(rst.st_blocks);
-	st->st_atim.tv_sec = be64toh(rst.st_atim.tv_sec);
-	st->st_atim.tv_nsec = be32toh(rst.st_atim.tv_nsec);
-	st->st_mtim.tv_sec = be64toh(rst.st_mtim.tv_sec);
-	st->st_mtim.tv_nsec = be32toh(rst.st_mtim.tv_nsec);
-	st->st_ctim.tv_sec = be64toh(rst.st_ctim.tv_sec);
-	st->st_ctim.tv_nsec = be32toh(rst.st_ctim.tv_nsec);
-	st->st_blksize = be32toh(rst.st_blksize);
-	st->st_mode = ntohs(rst.st_mode);
-	st->st_dev = ntohs(rst.st_dev);
-	st->st_nlink = ntohs(rst.st_nlink);
-	st->st_flags = ntohs(rst.st_flags);
+	st->st_ino = be64toh(rst->st_ino);
+	st->st_size = be64toh(rst->st_size);
+	st->st_blocks = be64toh(rst->st_blocks);
+	st->st_atim.tv_sec = be64toh(rst->st_atim.tv_sec);
+	st->st_atim.tv_nsec = be32toh(rst->st_atim.tv_nsec);
+	st->st_mtim.tv_sec = be64toh(rst->st_mtim.tv_sec);
+	st->st_mtim.tv_nsec = be32toh(rst->st_mtim.tv_nsec);
+	st->st_ctim.tv_sec = be64toh(rst->st_ctim.tv_sec);
+	st->st_ctim.tv_nsec = be32toh(rst->st_ctim.tv_nsec);
+	st->st_blksize = be32toh(rst->st_blksize);
+	st->st_mode = ntohs(rst->st_mode);
+	st->st_dev = ntohs(rst->st_dev);
+	st->st_nlink = ntohs(rst->st_nlink);
+	st->st_flags = ntohs(rst->st_flags);
 	st->st_uid = uid;
 	st->st_gid = gid;
 
 	return (1);
+}
+
+srfs_dirlist_t *
+srfs_client_opendir(char *path, off_t offset)
+{
+	srfs_iobuf_t req, resp;
+	srfs_dirlist_t *res;
+	size_t size;
+	char *ptr;
+
+	if (!srfs_request_fill_path(&req, SRFS_READDIR, path))
+		return (0);
+	srfs_iobuf_add64(&req, offset);
+	srfs_iobuf_add16(&req, SRFS_READDIR_BUFSZ);
+	if (!srfs_request_send(&req))
+		return (0);
+
+	if (!srfs_client_read_response(&resp))
+		return (0);
+
+	size = SRFS_IOBUF_LEFT(&resp);
+	if (size < 2 || size > SRFS_READDIR_BUFSZ) {
+		errno = EIO;
+		return (NULL);
+	}
+
+	res = malloc(sizeof(srfs_dirlist_t));
+	res->ptr = res->listbuf;
+	res->count = 0;
+	res->idx = 0;
+
+	if (!size)
+		return (res);
+
+	bcopy(resp.ptr, res->listbuf, size);
+	res->listbuf[SRFS_READDIR_BUFSZ - 1] = '\0';
+	res->count = 0;
+	for (ptr = res->listbuf; ptr - res->listbuf < size - 2;) {
+		ptr++; // d_type
+		ptr = index(ptr, '\0') + 1;
+		res->count++;
+	}
+
+	return (res);
+}
+
+srfs_dirent_t *
+srfs_client_readdir(srfs_dirlist_t *dirlist)
+{
+	srfs_dirent_t *res;
+
+	if (dirlist->count == dirlist->idx)
+		return (NULL);
+
+	res = (srfs_dirent_t *)dirlist->ptr;
+
+	dirlist->ptr = index(dirlist->ptr + 1, '\0') + 1;
+	dirlist->idx++;
+
+	return (res);
+}
+
+void
+srfs_client_closedir(srfs_dirlist_t *dirlist)
+{
+	free(dirlist);
 }

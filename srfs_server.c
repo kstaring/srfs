@@ -27,8 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <pwd.h>
-#include <grp.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -39,12 +37,27 @@
 #include <sys/endian.h>
 #include <arpa/inet.h>
 
-#include "srfs_server.h"
-#include "srfs_exports.h"
-#include "srfs_sock.h"
 #include "srfs_protocol.h"
+#include "srfs_exports.h"
+#include "srfs_server.h"
+#include "srfs_usrgrp.h"
+#include "srfs_iobuf.h"
+#include "srfs_sock.h"
 
 #define RESPONSE_SIZE(x) sizeof(srfs_response_t) + x
+
+#define SRFS_REPLBUF_SZ 4096
+typedef struct srfs_replbuf {
+	char buf[SRFS_REPLBUF_SZ];
+	srfs_response_t *response;
+	char *ptr;
+} srfs_replbuf_t;
+
+typedef int (*srfs_server_func_t)(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+typedef struct srfs_funcproc {
+	srfs_opcode_t opcode;
+	srfs_server_func_t func;
+} srfs_funcproc_t;
 
 static char *srfs_opcodes[] = {
 	"SRFS_MOUNT",
@@ -53,6 +66,23 @@ static char *srfs_opcodes[] = {
 	"SRFS_STAT",
 	"SRFS_READ",
 	"SRFS_WRITE"
+};
+
+static int srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+
+static srfs_funcproc_t srfs_funcprocs[] = {
+	{ SRFS_MOUNT,		srfs_mount },
+	{ SRFS_LOGIN,		srfs_not_implemented },
+	{ SRFS_READDIR,		srfs_readdir },
+	{ SRFS_STAT,		srfs_stat },
+	{ SRFS_READ,		srfs_not_implemented },
+	{ SRFS_WRITE,		srfs_not_implemented },
+	{ SRFS_ACCESS,		srfs_not_implemented },
+	{ SRFS_OPCODE_MAX,	srfs_invalid_opcode }
 };
 
 /* TODO only temporary, POC */
@@ -84,35 +114,25 @@ srfs_localpath(srfs_export_t *export, char *path, char *dstpath)
 	return (1);
 }
 
-static srfs_response_t *
-srfs_response_fill(srfs_request_t *request, char *buf, size_t payload_size)
+static int
+srfs_err_response(srfs_iobuf_t *r, srfs_errno_t err)
 {
-	srfs_response_t *res;
+	srfs_response_t *resp;
 
-	res = (srfs_response_t *)buf;
-	res->request_id = request->request_id;
-	res->response_size = htons(payload_size);
+	resp = SRFS_IOBUF_RESPONSE(r);
+	resp->r_errno = err;
+	resp->r_size = 0;
 
-	return (res);
+	return (1);
 }
 
-static void
-srfs_status_response(srfs_request_t *request, srfs_errno_t status)
+static int
+srfs_errno_response(srfs_iobuf_t *r)
 {
-	char buf[RESPONSE_SIZE(sizeof(srfs_errno_t))];
-	srfs_errno_t *st;
-
-	srfs_response_fill(request, buf, sizeof(uint16_t));
-	st = (srfs_errno_t *)((char *)buf + sizeof(srfs_response_t));
-	*st = htons(status);
-
-	srfs_sock_write_sync(buf, sizeof(buf));
-}
-
-static void
-srfs_errno_response(srfs_request_t *request)
-{
+	srfs_response_t *resp;
 	srfs_errno_t status;
+
+	resp = SRFS_IOBUF_RESPONSE(r);
 
 	switch (errno) {
 	case ENOENT:	status = SRFS_ENOENT; break;
@@ -137,129 +157,195 @@ srfs_errno_response(srfs_request_t *request)
 		status = EIO;
 	}
 
-	srfs_status_response(request, status);
+	resp->r_errno = status;
+	resp->r_size = 0;
+
+	return (1);
 }
 
-static void
-srfs_not_implemented(srfs_request_t *request)
+static int
+srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-printf("not implemented! %d\n", ntohs(request->opcode));
-	srfs_status_response(request, SRFS_ENOTSUP);
+printf("not implemented!\n");
+	return (srfs_err_response(resp, SRFS_ENOTSUP));
 }
 
-static void
-srfs_invalid_opcode(srfs_request_t *request)
+static int
+srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-printf("invalid opcode! %d\n", ntohs(request->opcode));
-	srfs_status_response(request, SRFS_EINVAL);
+printf("invalid opcode!\n");
+	return (srfs_err_response(resp, SRFS_EINVAL));
 }
 
-static void
-srfs_mount(srfs_request_t *request)
+static int
+srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-	char share[SRFS_MAXSHARELEN + 1];
 	srfs_export_t *export;
+	char *share;
 
-	if (request->request_size > SRFS_MAXSHARELEN)
-		return srfs_status_response(request, SRFS_ENAMETOOLONG);
+	if (req->size > SRFS_MAXNAMLEN + 1)
+		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
 
-	srfs_sock_read_sync(share, request->request_size);
-	share[request->request_size] = '\0';
+	if (!(share = srfs_iobuf_getstr(req)))
+		return (srfs_err_response(resp, SRFS_EIO));
 
 	if (!(export = srfs_export_by_sharename(share)))
-		return srfs_status_response(request, SRFS_ENOENT);
+		return (srfs_err_response(resp, SRFS_ENOENT));
 
 	exported = export;
 
 	printf("mounted %s\n", export->share);
-	return (srfs_status_response(request, SRFS_OK));
+
+	return (1);
 }
 
-static void
-srfs_stat(srfs_request_t *request)
+static int
+srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-	char rbuf[sizeof(srfs_errno_t) + sizeof(srfs_stat_t) + SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN];
-	char spath[SRFS_MAXPATHLEN + 1];
 	char path[SRFS_MAXPATHLEN + 1];
 	char *usrname, *grpname;
-	srfs_errno_t *status;
-	struct passwd *pwd;
-	size_t ulen, glen;
-	struct group *gr;
-	srfs_stat_t *rst;
-	char *usrgrpbuf;
+	srfs_stat_t rst;
 	struct stat st;
+	char *spath;
 
-	status = (srfs_errno_t *)rbuf;
-	rst = (srfs_stat_t *)(rbuf + sizeof(srfs_errno_t));
-	usrgrpbuf = rbuf + sizeof(srfs_errno_t) + sizeof(srfs_stat_t);
+	if (req->size > SRFS_MAXNAMLEN + 1)
+		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
 
-	if (request->request_size > SRFS_MAXPATHLEN)
-		return srfs_status_response(request, SRFS_ENAMETOOLONG);
+	if (!(spath = srfs_iobuf_getstr(req)))
+		return (srfs_err_response(resp, SRFS_EIO));
 
-	srfs_sock_read_sync(path, request->request_size);
-	path[request->request_size] = '\0';
+	if (!srfs_localpath(exported, spath, path))
+		return (srfs_errno_response(resp));
 
-	if (!srfs_localpath(exported, path, spath))
-		return srfs_errno_response(request);
+	if (stat(path, &st) != 0)
+		return (srfs_errno_response(resp));
 
-	if (stat(spath, &st) != 0)
-		return srfs_errno_response(request);
+	usrname = srfs_namebyuid(st.st_uid);
+	grpname = srfs_namebygid(st.st_gid);
 
-	if ((pwd = getpwuid(st.st_uid)))
-		usrname = pwd->pw_name;
-	else
-		usrname = "nobody";
-	if ((gr = getgrgid(st.st_gid)))
-		grpname = gr->gr_name;
-	else
-		grpname = "nogroup";
-
-	ulen = MIN(strlen(usrname), SRFS_MAXLOGNAMELEN - 1);
-	glen = MIN(strlen(grpname), SRFS_MAXGRPNAMELEN - 1);
-	strncpy(usrgrpbuf, usrname, ulen);
-	usrgrpbuf[ulen] = '\0';
-	strncpy(usrgrpbuf + ulen + 1, grpname, glen);
-	usrgrpbuf[ulen + glen + 1] = '\0';
-
-	rst->st_ino = htobe64(st.st_ino);
-	rst->st_size = htobe64(st.st_size);
-	rst->st_blocks = htobe64(st.st_blocks);
-	rst->st_atim.tv_sec = htobe64(st.st_atim.tv_sec);
-	rst->st_atim.tv_nsec = htobe32(st.st_atim.tv_nsec);
-	rst->st_mtim.tv_sec = htobe64(st.st_mtim.tv_sec);
-	rst->st_mtim.tv_nsec = htobe32(st.st_mtim.tv_nsec);
-	rst->st_ctim.tv_sec = htobe64(st.st_ctim.tv_sec);
-	rst->st_ctim.tv_nsec = htobe32(st.st_ctim.tv_nsec);
-	rst->st_blksize = htobe32(st.st_blksize);
-	rst->st_mode = htons(st.st_mode);
-	rst->st_dev = htons(st.st_dev);
-	rst->st_nlink = htons(st.st_nlink);
-	rst->st_flags = htons(st.st_flags);
-	rst->st_usrgrpsz = htons(ulen + glen + 2);
-
-	*status = htons(SRFS_OK);
+	rst.st_ino = htobe64(st.st_ino);
+	rst.st_size = htobe64(st.st_size);
+	rst.st_blocks = htobe64(st.st_blocks);
+	rst.st_atim.tv_sec = htobe64(st.st_atim.tv_sec);
+	rst.st_atim.tv_nsec = htobe32(st.st_atim.tv_nsec);
+	rst.st_mtim.tv_sec = htobe64(st.st_mtim.tv_sec);
+	rst.st_mtim.tv_nsec = htobe32(st.st_mtim.tv_nsec);
+	rst.st_ctim.tv_sec = htobe64(st.st_ctim.tv_sec);
+	rst.st_ctim.tv_nsec = htobe32(st.st_ctim.tv_nsec);
+	rst.st_blksize = htobe32(st.st_blksize);
+	rst.st_mode = htons(st.st_mode);
+	rst.st_dev = htons(st.st_dev);
+	rst.st_nlink = htons(st.st_nlink);
+	rst.st_flags = htons(st.st_flags);
+	rst.st_usrgrpsz = htons(strlen(usrname) + strlen(grpname) + 2);
 
 	printf("stat(%s): usr=%s grp=%s sz=%ld mode=%d\n", path,
 	       usrname, grpname, st.st_size, st.st_mode & 0777);
 
-	srfs_sock_write_sync(rbuf, sizeof(rbuf));
+	if (!srfs_iobuf_addptr(resp, (char *)&rst, sizeof(srfs_stat_t)))
+		return (srfs_err_response(resp, SRFS_EIO));
+	if (!srfs_iobuf_addstr(resp, usrname))
+		return (srfs_err_response(resp, SRFS_EIO));
+	if (!srfs_iobuf_addstr(resp, grpname))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	return (1);
+}
+
+static int
+srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	srfs_off_t offset, idx;
+	srfs_size_t replsize;
+	struct dirent *dire;
+	srfs_dirent_t rde;
+	char *spath;
+	size_t len;
+	DIR *dirp;
+
+	if (!(spath = srfs_iobuf_getstr(req)))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	if (strlen(spath) > SRFS_MAXNAMLEN)
+		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
+
+	if (!srfs_localpath(exported, spath, path))
+		return (srfs_errno_response(resp));
+
+	if (SRFS_IOBUF_LEFT(req) != sizeof(srfs_off_t) + sizeof(srfs_size_t))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	offset = srfs_iobuf_get64(req);
+	replsize = MIN(SRFS_READDIR_BUFSZ, srfs_iobuf_get16(req));
+
+	if (!(dirp = opendir(path)))
+		return (srfs_errno_response(resp));
+
+	resp->size = sizeof(srfs_response_t) + replsize;
+
+	for (idx = 0; (dire = readdir(dirp));) {
+		if (idx < offset)
+			continue;
+
+		len = strlen(dire->d_name);
+		if (len > SRFS_MAXNAMLEN)
+			continue; /* TODO: probably not the best action */
+
+		rde.d_type = dire->d_type;
+		bcopy(dire->d_name, rde.d_name, len + 1);
+		if (!srfs_iobuf_addptr(resp, (char *)&rde, len + 2))
+			break;
+	}
+
+	closedir(dirp);
+
+	return (1);
 }
 
 void
-srfs_request_handle(srfs_request_t *request)
+srfs_request_handle(srfs_request_t *req)
 {
-	request->request_size = ntohs(request->request_size);
-	request->opcode = ntohs(request->opcode);
+	srfs_server_func_t svrfunc;
+	srfs_response_t resp, *r;
+	srfs_iobuf_t sendbuf;
+	srfs_iobuf_t reqbuf;
 
-	switch (request->opcode) {
-	case SRFS_MOUNT: return srfs_mount(request);
-	case SRFS_LOGIN: return srfs_not_implemented(request);
-	case SRFS_READDIR: return srfs_not_implemented(request);
-	case SRFS_STAT: return srfs_stat(request);
-	case SRFS_READ: return srfs_not_implemented(request);
-	case SRFS_WRITE: return srfs_not_implemented(request);
-	default: return srfs_invalid_opcode(request);
+	req->r_size = ntohs(req->r_size);
+	req->r_opcode = ntohs(req->r_opcode);
+
+	SRFS_IOBUF_INIT(&reqbuf);
+	SRFS_IOBUF_INIT(&sendbuf);
+	resp.r_serial = req->r_serial;
+	resp.r_size = 0;
+	resp.r_errno = SRFS_OK;
+	srfs_iobuf_addptr(&sendbuf, (char *)&resp, sizeof(srfs_response_t));
+
+	if (req->r_size > SRFS_IOBUFSZ) {
+		srfs_err_response(&sendbuf, SRFS_EIO);
+		srfs_sock_write_sync(sendbuf.buf, sizeof(srfs_response_t));
+		return;
+	}
+
+	if (req->r_size) {
+		if (!srfs_sock_read_sync(reqbuf.buf, req->r_size))
+			return;
+		reqbuf.size = req->r_size;
+	} else {
+		reqbuf.size = 0;
+	}
+
+	if (req->r_opcode >= SRFS_OPCODE_MAX)
+		svrfunc = srfs_funcprocs[SRFS_OPCODE_MAX].func;
+	else
+		svrfunc = srfs_funcprocs[req->r_opcode].func;
+
+	if (svrfunc(&reqbuf, &sendbuf)) {
+		r = SRFS_IOBUF_RESPONSE(&sendbuf);
+		sendbuf.size = SRFS_IOBUF_SIZE(&sendbuf);
+		r->r_size = htons(sendbuf.size - sizeof(srfs_response_t));
+		r->r_errno = htons(r->r_errno);
+		srfs_sock_write_sync(sendbuf.buf, sendbuf.size);
 	}
 }
 
