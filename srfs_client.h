@@ -46,6 +46,9 @@ extern srfs_dirlist_t *srfs_client_opendir(char *path, off_t offset);
 extern srfs_dirent_t *srfs_client_readdir(srfs_dirlist_t *dirlist);
 extern void srfs_client_closedir(srfs_dirlist_t *dirlist);
 
+extern int srfs_client_read(char *path, off_t offset, size_t size, char *buf);
+extern int srfs_client_write(char *path, off_t offset, size_t size, char *buf);
+
 extern srfs_id_t srfs_serial(void);
 extern int srfs_request(srfs_opcode_t opcode);
 extern int srfs_response(void);

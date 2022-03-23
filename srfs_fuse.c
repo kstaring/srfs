@@ -40,6 +40,8 @@
 #include <signal.h>
 #include <dirent.h>
 #include <arpa/inet.h>
+#include <sys/param.h>
+#include <sys/mount.h>
 #include <fuse_opt.h>
 #include <fuse_lowlevel.h>
 
@@ -58,6 +60,11 @@ static int srfs_fuse_readdir(const char *path, void *buffer,
 			     struct fuse_file_info *fi);
 static int srfs_fuse_read(const char *path, char *buffer, size_t size,
 			  off_t offset, struct fuse_file_info *fi);
+static int srfs_fuse_write(const char *path, const char *buffer, size_t size,
+			   off_t offset, struct fuse_file_info *fi);
+static int srfs_fuse_create(const char *path, mode_t mode,
+			    struct fuse_file_info *fi);
+static int srfs_fuse_truncate(const char *path, off_t offset);
 
 /*static const struct fuse_opt opts[] = {
 	FUSE_OPT_END
@@ -68,7 +75,10 @@ static struct fuse_operations fops = {
 	.opendir = srfs_fuse_opendir,
 	.releasedir = srfs_fuse_releasedir,
 	.readdir = srfs_fuse_readdir,
-	.read = srfs_fuse_read
+	.read = srfs_fuse_read,
+	.write = srfs_fuse_write,
+	.create = srfs_fuse_create,
+	.truncate = srfs_fuse_truncate
 };
 
 static struct fuse *fuse = NULL;
@@ -82,6 +92,7 @@ sigint(int signal)
 {
 	fuse_unmount(mountpoint, chan);
 	fuse_destroy(fuse);
+	unmount(mountpoint, 0);
 
 	exit(0);
 }
@@ -134,10 +145,49 @@ srfs_fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
 }
 
 static int
-srfs_fuse_read(const char *path, char *buffer, size_t size, off_t offset,
+srfs_fuse_read(const char *path, char *buf, size_t sz, off_t offset,
 	       struct fuse_file_info *fi)
 {
-printf("srfs_read %s!\n", path);
+	size_t size;
+	int r, rs;
+
+	for (size = sz; size > 0; size -= r) {
+		rs = MIN(1024, size);
+		if (!(r = srfs_client_read((char *)path, offset, rs, buf)))
+			return (-errno);
+
+		if (r < rs)
+			return (-EOF);
+
+		offset += r;
+		buf += r;
+	}
+
+	return (sz);
+}
+
+static int
+srfs_fuse_write(const char *path, const char *buffer, size_t size,
+		off_t offset, struct fuse_file_info *fi)
+{
+	int res;
+
+	if (!(res = srfs_client_write((char *)path, offset, size,
+				      (char *)buffer)))
+		return (-errno);
+
+	return (res);
+}
+
+static int
+srfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+	return (-ENOSYS);
+}
+
+static int
+srfs_fuse_truncate(const char *path, off_t offset)
+{
 	return (0);
 }
 

@@ -73,14 +73,16 @@ static int srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
 static srfs_funcproc_t srfs_funcprocs[] = {
 	{ SRFS_MOUNT,		srfs_mount },
 	{ SRFS_LOGIN,		srfs_not_implemented },
 	{ SRFS_READDIR,		srfs_readdir },
 	{ SRFS_STAT,		srfs_stat },
-	{ SRFS_READ,		srfs_not_implemented },
-	{ SRFS_WRITE,		srfs_not_implemented },
+	{ SRFS_READ,		srfs_read },
+	{ SRFS_WRITE,		srfs_write },
 	{ SRFS_ACCESS,		srfs_not_implemented },
 	{ SRFS_OPCODE_MAX,	srfs_invalid_opcode }
 };
@@ -200,21 +202,35 @@ srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 }
 
 static int
+srfs_get_path(srfs_iobuf_t *req, char *path)
+{
+	char *spath;
+
+	if (!(spath = srfs_iobuf_getstr(req))) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (strlen(spath) > SRFS_MAXNAMLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
+
+	if (!srfs_localpath(exported, spath, path))
+		return (0);
+
+	return (1);
+}
+
+static int
 srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	char *usrname, *grpname;
 	srfs_stat_t rst;
 	struct stat st;
-	char *spath;
 
-	if (req->size > SRFS_MAXNAMLEN + 1)
-		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
-
-	if (!(spath = srfs_iobuf_getstr(req)))
-		return (srfs_err_response(resp, SRFS_EIO));
-
-	if (!srfs_localpath(exported, spath, path))
+	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
 	if (stat(path, &st) != 0)
@@ -239,9 +255,6 @@ srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	rst.st_flags = htons(st.st_flags);
 	rst.st_usrgrpsz = htons(strlen(usrname) + strlen(grpname) + 2);
 
-	printf("stat(%s): usr=%s grp=%s sz=%ld mode=%d\n", path,
-	       usrname, grpname, st.st_size, st.st_mode & 0777);
-
 	if (!srfs_iobuf_addptr(resp, (char *)&rst, sizeof(srfs_stat_t)))
 		return (srfs_err_response(resp, SRFS_EIO));
 	if (!srfs_iobuf_addstr(resp, usrname))
@@ -260,24 +273,18 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	srfs_size_t replsize;
 	struct dirent *dire;
 	srfs_dirent_t rde;
-	char *spath;
 	size_t len;
 	DIR *dirp;
 
-	if (!(spath = srfs_iobuf_getstr(req)))
-		return (srfs_err_response(resp, SRFS_EIO));
-
-	if (strlen(spath) > SRFS_MAXNAMLEN)
-		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
-
-	if (!srfs_localpath(exported, spath, path))
+	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
 	if (SRFS_IOBUF_LEFT(req) != sizeof(srfs_off_t) + sizeof(srfs_size_t))
 		return (srfs_err_response(resp, SRFS_EIO));
 
 	offset = srfs_iobuf_get64(req);
-	replsize = MIN(SRFS_READDIR_BUFSZ, srfs_iobuf_get16(req));
+	replsize = srfs_iobuf_get16(req);
+	replsize = MIN(SRFS_READDIR_BUFSZ, replsize);
 
 	if (!(dirp = opendir(path)))
 		return (srfs_errno_response(resp));
@@ -299,6 +306,78 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	}
 
 	closedir(dirp);
+
+	return (1);
+}
+
+static int
+srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	srfs_off_t offset;
+	size_t len, size;
+	FILE *f;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	offset = srfs_iobuf_get64(req);
+	size = srfs_iobuf_get64(req);
+	size = MIN(MIN(1024, size), resp->size);
+
+	if (!(f = fopen(path, "r")))
+		return (srfs_errno_response(resp));
+
+	if (offset) {
+		if (fseek(f, offset, SEEK_SET) == -1) {
+			fclose(f);
+			return (srfs_errno_response(resp));
+		}
+	}
+
+	if ((len = fread(resp->ptr, 1, size, f)) == -1) {
+		fclose(f);
+		return (srfs_errno_response(resp));
+	}
+	fclose(f);
+
+	resp->ptr += len;
+
+	return (1);
+}
+
+static int
+srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	srfs_off_t offset;
+	size_t len, size;
+	FILE *f;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	offset = srfs_iobuf_get64(req);
+	size = SRFS_IOBUF_LEFT(req);
+
+	if (!(f = fopen(path, "w")))
+		return (srfs_errno_response(resp));
+
+	if (offset) {
+		if (fseek(f, offset, SEEK_SET) == -1) {
+			fclose(f);
+			return (srfs_errno_response(resp));
+		}
+	}
+	if ((len = fwrite(req->ptr, 1, size, f)) == -1) {
+		fclose(f);
+		return (srfs_errno_response(resp));
+	}
+	fclose(f);
+
+	printf("write(%s, %ld, %ld): %ld\n", path, offset, size, len);
+
+	resp->ptr += len;
 
 	return (1);
 }

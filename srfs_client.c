@@ -358,3 +358,45 @@ srfs_client_closedir(srfs_dirlist_t *dirlist)
 {
 	free(dirlist);
 }
+
+int
+srfs_client_read(char *path, off_t offset, size_t size, char *buf)
+{
+	srfs_iobuf_t req, resp;
+
+	if (!srfs_request_fill_path(&req, SRFS_READ, path))
+		return (0);
+	srfs_iobuf_add64(&req, offset);
+	srfs_iobuf_add64(&req, size);
+
+	if (!srfs_request_send(&req))
+		return (0);
+
+	if (!srfs_client_read_response(&resp))
+		return (0);
+
+	bcopy(resp.ptr, buf, SRFS_IOBUF_LEFT(&resp));
+
+	return (SRFS_IOBUF_LEFT(&resp));
+}
+
+int
+srfs_client_write(char *path, off_t offset, size_t size, char *buf)
+{
+	srfs_iobuf_t req, resp;
+
+	if (!srfs_request_fill_path(&req, SRFS_WRITE, path))
+		return (0);
+	srfs_iobuf_add64(&req, offset);
+
+	if (!srfs_iobuf_addptr(&req, buf, size))
+		return (-EIO);
+
+	if (!srfs_request_send(&req))
+		return (0);
+
+	if (!srfs_client_read_response(&resp))
+		return (0);
+
+	return (size);
+}

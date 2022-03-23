@@ -95,6 +95,10 @@ srfs_server_listen(in_port_t port)
 
 	opt = 1;
 	setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	opt = 0;
+	if (setsockopt(sock_fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt,
+		       sizeof(opt) == -1))
+		printf("setsockopt: failed setting IPV6_V6ONLY to 0\n");
 
 	addrlen = sizeof(struct sockaddr_in6);
 	bzero(&addr, addrlen);
@@ -259,6 +263,7 @@ srfs_sock_connect(char *server)
 		fd = socket(i->ai_family, i->ai_socktype, i->ai_protocol);
 		if (fd < 0)
 			continue;
+
 		if (connect(fd, i->ai_addr, i->ai_addrlen) == -1) {
 			close(fd);
 			continue;
