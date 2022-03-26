@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/endian.h>
+#include <sys/statvfs.h>
 #include <arpa/inet.h>
 
 #include "srfs_protocol.h"
@@ -61,6 +62,7 @@ typedef struct srfs_funcproc {
 
 static char *srfs_opcodes[] = {
 	"SRFS_MOUNT",
+	"SRFS_STATVFS",
 	"SRFS_LOGIN",
 	"SRFS_READDIR",
 	"SRFS_STAT",
@@ -68,9 +70,12 @@ static char *srfs_opcodes[] = {
 	"SRFS_WRITE"
 };
 
+static int srfs_get_path(srfs_iobuf_t *req, char *path);
+
 static int srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp);
@@ -78,6 +83,7 @@ static int srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
 static srfs_funcproc_t srfs_funcprocs[] = {
 	{ SRFS_MOUNT,		srfs_mount },
+	{ SRFS_STATVFS,		srfs_statvfs },
 	{ SRFS_LOGIN,		srfs_not_implemented },
 	{ SRFS_READDIR,		srfs_readdir },
 	{ SRFS_STAT,		srfs_stat },
@@ -218,6 +224,39 @@ srfs_get_path(srfs_iobuf_t *req, char *path)
 
 	if (!srfs_localpath(exported, spath, path))
 		return (0);
+
+	return (1);
+}
+
+static int
+srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	srfs_statvfs_t svfs;
+	struct statvfs vfs;
+	uint64_t namelen;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (statvfs(path, &vfs) == -1)
+		return (srfs_errno_response(resp));
+
+	svfs.f_bavail = htobe64(vfs.f_bavail);
+	svfs.f_bfree = htobe64(vfs.f_bfree);
+	svfs.f_blocks = htobe64(vfs.f_blocks);
+	svfs.f_favail = htobe64(vfs.f_favail);
+	svfs.f_ffree = htobe64(vfs.f_ffree);
+	svfs.f_files = htobe64(vfs.f_files);
+	svfs.f_bsize = htobe64(vfs.f_bsize);
+	svfs.f_flag = htobe64(vfs.f_flag); // TODO when RO implemented, override
+	svfs.f_frsize = htobe64(vfs.f_frsize);
+	svfs.f_fsid = htobe64(vfs.f_fsid);
+	namelen = MIN(SRFS_MAXNAMLEN, vfs.f_namemax);
+	svfs.f_namemax = htobe64(namelen);
+
+	if (!srfs_iobuf_addptr(resp, (char *)&svfs, sizeof(srfs_statvfs_t)))
+		return (srfs_err_response(resp, SRFS_EIO));
 
 	return (1);
 }

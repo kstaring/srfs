@@ -53,7 +53,16 @@ typedef struct srfs_dirlist {
 
 static srfs_id_t serial;
 
+static int srfs_return_errno(int err);
 static void srfs_requesthdr_fill(srfs_iobuf_t *r, srfs_opcode_t opcode);
+
+static int
+srfs_return_errno(int err)
+{
+	errno = err;
+
+	return (0);
+}
 
 static void
 srfs_requesthdr_fill(srfs_iobuf_t *r, srfs_opcode_t opcode)
@@ -72,10 +81,8 @@ srfs_request_fill_path(srfs_iobuf_t *req, srfs_opcode_t opcode, char *path)
 {
 	size_t len;
 
-	if ((len = strlen(path)) > SRFS_MAXPATHLEN) {
-		errno = ENAMETOOLONG;
-		return (0);
-	}
+	if ((len = strlen(path)) > SRFS_MAXPATHLEN)
+		return (srfs_return_errno(ENAMETOOLONG));
 
 	SRFS_IOBUF_INIT(req);
 	srfs_requesthdr_fill(req, opcode);
@@ -161,10 +168,8 @@ srfs_client_read_response(srfs_iobuf_t *resp)
 		return (0);
 	}
 
-	if (r->r_size > resp->size - sizeof(srfs_response_t)) {
-		errno = EMSGSIZE;
-		return (0);
-	}
+	if (r->r_size > resp->size - sizeof(srfs_response_t))
+		return (srfs_return_errno(EMSGSIZE));
 
 	if (r->r_size) {
 		resp->ptr = resp->buf + sizeof(srfs_response_t);
@@ -200,10 +205,8 @@ srfs_mount(char *share)
 	srfs_iobuf_t req, resp;
 	size_t len;
 
-	if ((len = strlen(share)) > SRFS_MAXNAMLEN) {
-		errno = ENAMETOOLONG;
-		return (0);
-	}
+	if ((len = strlen(share)) > SRFS_MAXNAMLEN)
+		return (srfs_return_errno(ENAMETOOLONG));
 
 	SRFS_IOBUF_INIT(&req);
 	srfs_requesthdr_fill(&req, SRFS_MOUNT);
@@ -215,10 +218,35 @@ srfs_mount(char *share)
 	if (!srfs_client_read_response(&resp))
 		return (0);
 
-	if (SRFS_IOBUF_LEFT(&resp) != 0) {
-		errno = EINVAL;
+	if (SRFS_IOBUF_LEFT(&resp) != 0)
+		return (srfs_return_errno(EINVAL));
+
+	return (1);
+}
+
+int
+srfs_client_statvfs(char *path, struct statvfs *vfs)
+{
+	srfs_iobuf_t req, resp;
+	srfs_statvfs_t *svfs;
+
+	if (!srfs_request_path(path, SRFS_STATVFS, &req, &resp))
 		return (0);
-	}
+
+	if (!(svfs = (srfs_statvfs_t *)srfs_iobuf_getptr(&resp, sizeof(srfs_statvfs_t))))
+		return (srfs_return_errno(EIO));
+
+	vfs->f_bavail = be64toh(svfs->f_bavail);
+	vfs->f_bfree = be64toh(svfs->f_bfree);
+	vfs->f_blocks = be64toh(svfs->f_blocks);
+	vfs->f_favail = be64toh(svfs->f_favail);
+	vfs->f_ffree = be64toh(svfs->f_ffree);
+	vfs->f_files = be64toh(svfs->f_files);
+	vfs->f_bsize = be64toh(svfs->f_bsize);
+	vfs->f_flag = be64toh(svfs->f_flag);
+	vfs->f_frsize = be64toh(svfs->f_frsize);
+	vfs->f_fsid = be64toh(svfs->f_fsid);
+	vfs->f_namemax = be64toh(svfs->f_namemax);
 
 	return (1);
 }
@@ -240,35 +268,25 @@ srfs_client_stat(char *path, struct stat *st)
 
 	r = SRFS_IOBUF_RESPONSE(&resp);
 	len = sizeof(srfs_stat_t) + 4;
-	if (r->r_size < len) {
-		errno = EIO;
-		return (0);
-	}
+	if (r->r_size < len)
+		return (srfs_return_errno(EIO));
 
-	if (!(rst = (srfs_stat_t *)srfs_iobuf_getptr(&resp, sizeof(srfs_stat_t)))) {
-		errno = EIO;
-		return (0);
-	}
+	if (!(rst = (srfs_stat_t *)srfs_iobuf_getptr(&resp, sizeof(srfs_stat_t))))
+		return (srfs_return_errno(EIO));
 
 	len = ntohs(rst->st_usrgrpsz);
-	if (len < 4 || len > SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN) {
-		errno = EIO;
-		return (0);
-	}
+	if (len < 4 || len > SRFS_MAXLOGNAMELEN + SRFS_MAXGRPNAMELEN)
+		return (srfs_return_errno(EIO));
 
-	if (!(usrgrpbuf = srfs_iobuf_getptr(&resp, len))) {
-		errno = EIO;
-		return (0);
-	}
+	if (!(usrgrpbuf = srfs_iobuf_getptr(&resp, len)))
+		return (srfs_return_errno(EIO));
 
 	usrname = usrgrpbuf;
 	if (!(grpname = index(usrgrpbuf, '\0')))
 		return (0);
 	grpname++;
-	if (!strlen(usrname) || !strlen(grpname)) {
-		errno = EIO;
-		return (0);
-	}
+	if (!strlen(usrname) || !strlen(grpname))
+		return (srfs_return_errno(EIO));
 
 	uid = srfs_uidbyname(usrname);
 	gid = srfs_gidbyname(grpname);
@@ -302,17 +320,22 @@ srfs_client_opendir(char *path, off_t offset)
 	char *ptr;
 
 	if (!srfs_request_fill_path(&req, SRFS_READDIR, path))
-		return (0);
+		return (NULL);
 	srfs_iobuf_add64(&req, offset);
 	srfs_iobuf_add16(&req, SRFS_READDIR_BUFSZ);
 	if (!srfs_request_send(&req))
-		return (0);
+		return (NULL);
 
 	if (!srfs_client_read_response(&resp))
-		return (0);
+		return (NULL);
 
 	size = SRFS_IOBUF_LEFT(&resp);
-	if (size < 2 || size > SRFS_READDIR_BUFSZ) {
+	if (size < 2) {
+		errno = 0;
+		return (NULL);
+	}
+
+	if (size > SRFS_READDIR_BUFSZ) {
 		errno = EIO;
 		return (NULL);
 	}

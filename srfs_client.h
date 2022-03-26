@@ -31,6 +31,7 @@
 #define _SRFS_CLIENT_H
 
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 
 #include "srfs_protocol.h"
 
@@ -39,6 +40,8 @@ typedef struct srfs_dirlist srfs_dirlist_t;
 extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
 
 extern int srfs_mount(char *share);
+
+extern int srfs_client_statvfs(char *share, struct statvfs *vfs);
 
 extern int srfs_client_stat(char *path, struct stat *st);
 

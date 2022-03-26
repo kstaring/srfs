@@ -52,6 +52,7 @@
 static void sigint(int signal);
 _Noreturn static void srfs_usage(void);
 
+static int srfs_fuse_statfs(const char *path, struct statvfs *vfs);
 static int srfs_fuse_getattr(const char *path, struct stat *st);
 static int srfs_fuse_opendir(const char *path, struct fuse_file_info *fi);
 static int srfs_fuse_releasedir(const char *path, struct fuse_file_info *fi);
@@ -71,6 +72,7 @@ static int srfs_fuse_truncate(const char *path, off_t offset);
 };*/
 
 static struct fuse_operations fops = {
+	.statfs = srfs_fuse_statfs,
 	.getattr = srfs_fuse_getattr,
 	.opendir = srfs_fuse_opendir,
 	.releasedir = srfs_fuse_releasedir,
@@ -103,6 +105,12 @@ srfs_usage(void)
 	printf("Usage: srfs [server:/share] [local mountpoint]\n\n");
 
 	exit(1);
+}
+
+static int
+srfs_fuse_statfs(const char *path, struct statvfs *vfs)
+{
+	return (srfs_client_statvfs((char *)path, vfs) ? 0 : -errno);
 }
 
 static int
@@ -276,7 +284,12 @@ srfs_connect(char *server_path)
 	char *path;
 	char *sep;
 
-	if (!(sep = index(server_path, ':')))
+	if (!(sep = index(server_path, '/')))
+		return (0);
+	if (sep == server_path)
+		return (0);
+	sep--;
+	if (*sep != ':')
 		return (0);
 
 	*sep = '\0';

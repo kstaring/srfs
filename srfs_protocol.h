@@ -46,17 +46,19 @@
 /* SRFS opcodes */
 #define SRFS_MOUNT	0	/* Mount a remote filesystem / directory */
 
-#define SRFS_LOGIN	1	/* Login a client user */
+#define SRFS_STATVFS	1	/* Get infor about a remote filesystem */
 
-#define SRFS_READDIR	2	/* Read the next entry from the directory */
+#define SRFS_LOGIN	2	/* Login a client user */
 
-#define SRFS_STAT	3	/* Get file info */
-#define SRFS_READ	4	/* Read data from a file */
-#define SRFS_WRITE	5	/* Write data to a file */
+#define SRFS_READDIR	3	/* Read the next entry from the directory */
 
-#define SRFS_ACCESS	6	/* Check file access */
+#define SRFS_STAT	4	/* Get file info */
+#define SRFS_READ	5	/* Read data from a file */
+#define SRFS_WRITE	6	/* Write data to a file */
 
-#define SRFS_OPCODE_MAX	7	/* Defines the number of opcodes */
+#define SRFS_ACCESS	7	/* Check file access */
+
+#define SRFS_OPCODE_MAX	8	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0
@@ -97,6 +99,24 @@ typedef struct __attribute__((__packed__)) srfs_response {
 	srfs_errno_t r_errno;
 	/* payload data... */
 } srfs_response_t;
+
+typedef uint64_t srfs_fsblkcnt_t;
+typedef uint64_t srfs_fsfilcnt_t;
+typedef uint64_t srfs_ulong_t;
+
+typedef struct __attribute((__packed__)) srfs_statvfs {
+	srfs_fsblkcnt_t f_bavail;
+	srfs_fsblkcnt_t f_bfree;
+	srfs_fsblkcnt_t f_blocks;
+	srfs_fsfilcnt_t f_favail;
+	srfs_fsfilcnt_t f_ffree;
+	srfs_fsfilcnt_t f_files;
+	srfs_ulong_t f_bsize;
+	srfs_ulong_t f_flag;
+	srfs_ulong_t f_frsize;
+	srfs_ulong_t f_fsid;
+	srfs_ulong_t f_namemax;
+} srfs_statvfs_t;
 
 typedef uint16_t srfs_dev_t;
 typedef uint64_t srfs_ino_t;
