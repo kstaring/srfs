@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -29,36 +29,29 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/endian.h>
 #include <sys/statvfs.h>
 #include <arpa/inet.h>
 
-#include "srfs_protocol.h"
-#include "srfs_exports.h"
-#include "srfs_server.h"
-#include "srfs_usrgrp.h"
-#include "srfs_iobuf.h"
+#include "srfs_pki.h"
 #include "srfs_sock.h"
+#include "srfs_iobuf.h"
+#include "srfs_config.h"
+#include "srfs_usrgrp.h"
+#include "srfs_server.h"
+#include "srfs_exports.h"
+#include "srfs_protocol.h"
 
 #define RESPONSE_SIZE(x) sizeof(srfs_response_t) + x
 
-#define SRFS_REPLBUF_SZ 4096
-typedef struct srfs_replbuf {
-	char buf[SRFS_REPLBUF_SZ];
-	srfs_response_t *response;
-	char *ptr;
-} srfs_replbuf_t;
-
 typedef int (*srfs_server_func_t)(srfs_iobuf_t *req, srfs_iobuf_t *resp);
-typedef struct srfs_funcproc {
-	srfs_opcode_t opcode;
-	srfs_server_func_t func;
-} srfs_funcproc_t;
 
 static char *srfs_opcodes[] = {
 	"SRFS_MOUNT",
@@ -66,32 +59,67 @@ static char *srfs_opcodes[] = {
 	"SRFS_LOGIN",
 	"SRFS_READDIR",
 	"SRFS_STAT",
+	"SRFS_CREATE",
 	"SRFS_READ",
-	"SRFS_WRITE"
+	"SRFS_WRITE",
+	"SRFS_ACCESS",
+	"SRFS_CHMOD",
+	"SRFS_CHOWN",
+	"SRFS_MKDIR",
+	"SRFS_RMDIR",
+	"SRFS_LINK",
+	"SRFS_SYMLINK",
+	"SRFS_READLINK",
+	"SRFS_UNLINK"
 };
 
 static int srfs_get_path(srfs_iobuf_t *req, char *path);
+static int srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path);
 
-static int srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+//static int srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_need_auth(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+
 static int srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_login(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_create(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_access(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_unlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_mkdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_rmdir(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_chown(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_chmod(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_readlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
-static srfs_funcproc_t srfs_funcprocs[] = {
-	{ SRFS_MOUNT,		srfs_mount },
-	{ SRFS_STATVFS,		srfs_statvfs },
-	{ SRFS_LOGIN,		srfs_not_implemented },
-	{ SRFS_READDIR,		srfs_readdir },
-	{ SRFS_STAT,		srfs_stat },
-	{ SRFS_READ,		srfs_read },
-	{ SRFS_WRITE,		srfs_write },
-	{ SRFS_ACCESS,		srfs_not_implemented },
-	{ SRFS_OPCODE_MAX,	srfs_invalid_opcode }
+static srfs_server_func_t srfs_server_funcs[] = {
+	srfs_mount,			// SRFS_MOUNT
+	srfs_statvfs,			// SRFS_STATVFS
+	srfs_login,			// SRFS_LOGIN
+	srfs_readdir,			// SRFS_READDIR
+	srfs_stat,			// SRFS_STAT
+	srfs_create,			// SRFS_CREATE
+	srfs_read,			// SRFS_READ
+	srfs_write,			// SRFS_WRITE
+	srfs_access,			// SRFS_ACCESS
+	srfs_chmod,			// SRFS_CHMOD
+	srfs_chown,			// SRFS_CHOWN
+	srfs_mkdir,			// SRFS_MKDIR
+	srfs_rmdir,			// SRFS_RMDIR
+	srfs_link,			// SRFS_LINK
+	srfs_symlink,			// SRFS_SYMLINK
+	srfs_readlink,			// SRFS_READLINK
+	srfs_unlink,			// SRFS_UNLINK
+	srfs_invalid_opcode		// SRFS_OPCODE_MAX
 };
+
+static int client_authenticated = 0;
 
 /* TODO only temporary, POC */
 static srfs_export_t *exported = NULL;
@@ -160,6 +188,7 @@ srfs_errno_response(srfs_iobuf_t *r)
 	case EAGAIN:	status = SRFS_EAGAIN; break;
 	case ENOTSUP:	status = SRFS_ENOTSUP; break;
 	case ENAMETOOLONG: status = SRFS_ENAMETOOLONG; break;
+	case ENEEDAUTH: status = SRFS_ENEEDAUTH; break;
 	default:
 		printf("srfs_errno_response: unhandled errno: %d\n", errno);
 		status = EIO;
@@ -171,18 +200,120 @@ srfs_errno_response(srfs_iobuf_t *r)
 	return (1);
 }
 
+/*
 static int
 srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 printf("not implemented!\n");
 	return (srfs_err_response(resp, SRFS_ENOTSUP));
 }
+*/
 
 static int
 srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 printf("invalid opcode!\n");
 	return (srfs_err_response(resp, SRFS_EINVAL));
+}
+
+static int
+srfs_need_auth(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+printf("need auth!\n");
+	return (srfs_err_response(resp, SRFS_ENEEDAUTH));
+}
+
+static int
+srfs_verify_host(char *buf, size_t sz)
+{
+	char path[MAXPATHLEN + 1];
+	struct dirent *dire;
+	int res = 0;
+	DIR *dirp;
+
+	if (!(dirp = opendir(SRFS_CLIENT_KEYS_DIR)))
+		return (0);
+
+	for(; (dire = readdir(dirp));) {
+		if (dire->d_name[0] == '.')
+			continue;
+		if (snprintf(path, MAXPATHLEN + 1, "%s/%s",
+			     SRFS_CLIENT_KEYS_DIR, dire->d_name) == MAXPATHLEN)
+			continue;
+
+		if (srfs_rsa_verify_path(path, sign_challenge(),
+					 SRFS_CHALLENGE_SZ, buf, sz)) {
+			res = 1;
+			break;
+		}
+	}
+
+	closedir(dirp);
+
+	return (res);
+}
+
+static int
+srfs_verify_user(char *usrname, char *buf, size_t sz)
+{
+	char path[MAXPATHLEN + 1];
+	int res = 0;
+	char *home;
+	uid_t uid;
+
+	uid = srfs_uidbyname(usrname);
+	if (!(home = srfs_homebyuid(uid)))
+		return (0);
+
+	if (snprintf(path, MAXPATHLEN + 1, "%s/.srfs/id_rsa.pub",
+		     home) == MAXPATHLEN)
+			return (0);
+
+	if (srfs_rsa_verify_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
+				 buf, sz)) {
+		res = 1;
+		client_authenticated = 1;
+		sfrs_set_authenticated(usrname);
+	}
+
+	return (res);
+}
+
+static int
+srfs_login(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char *buf, *usrname;
+	srfs_auth_t auth;
+	size_t sz;
+
+	if (SRFS_IOBUF_LEFT(req) < 1)
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	auth = srfs_iobuf_get8(req);
+
+	switch (auth) {
+	case SRFS_AUTH_HOST:
+		buf = req->ptr;
+		sz = SRFS_IOBUF_LEFT(req);
+		if (!srfs_verify_host(buf, sz))
+			return (srfs_err_response(resp, SRFS_EACCESS));
+		client_authenticated = 1;
+		break;
+	case SRFS_AUTH_SRFS:
+		if (!(usrname = srfs_iobuf_getstr(req)))
+			return (srfs_err_response(resp, SRFS_EIO));
+		buf = req->ptr;
+		sz = SRFS_IOBUF_LEFT(req);
+		if (!srfs_verify_user(usrname, buf, sz))
+			return (srfs_err_response(resp, SRFS_EACCESS));
+		client_authenticated = 1;
+		break;
+	case SRFS_AUTH_SSH: break;
+	case SRFS_AUTH_PWD: break;
+	default: return (srfs_err_response(resp, SRFS_ENOTSUP));
+	}
+
+	return (1);
 }
 
 static int
@@ -202,7 +333,34 @@ srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 
 	exported = export;
 
-	printf("mounted %s\n", export->share);
+	return (1);
+}
+
+static int
+srfs_get_usrctx(srfs_iobuf_t *req)
+{
+	char *usrname;
+	char *grpname;
+	uid_t uid;
+	gid_t gid;
+
+	if (!(usrname = srfs_iobuf_getstr(req)))
+		return (0);
+	if (!(grpname = srfs_iobuf_getstr(req)))
+		return (0);
+
+	uid = srfs_uidbyname(usrname);
+	gid = srfs_gidbyuid(uid);
+
+	if (uid == 0 || !srfs_uid_authenticated(uid)) {
+		uid = srfs_uidbyname("nobody");
+		gid = srfs_gidbyname("nogroup");
+	}
+
+	if (getuid() == 0) {
+		seteuid(uid);
+		setegid(gid);
+	}
 
 	return (1);
 }
@@ -211,6 +369,11 @@ static int
 srfs_get_path(srfs_iobuf_t *req, char *path)
 {
 	char *spath;
+
+	if (!srfs_get_usrctx(req)) {
+		errno = EIO;
+		return (0);
+	}
 
 	if (!(spath = srfs_iobuf_getstr(req))) {
 		errno = EIO;
@@ -224,6 +387,45 @@ srfs_get_path(srfs_iobuf_t *req, char *path)
 
 	if (!srfs_localpath(exported, spath, path))
 		return (0);
+
+	return (1);
+}
+
+static int
+srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path)
+{
+	char tmp[SRFS_MAXPATHLEN + 1];
+	char *spath, *sep;
+
+	if (!srfs_get_usrctx(req)) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!(spath = srfs_iobuf_getstr(req))) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (strlen(spath) > SRFS_MAXNAMLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
+
+	if (!(sep = rindex(spath, '/'))) {
+		errno = EIO;
+		return (0);
+	}
+	*sep = '\0';
+
+	if (!srfs_localpath(exported, spath, tmp))
+		return (0);
+
+	if (snprintf(path, SRFS_MAXPATHLEN + 1, "%s/%s", tmp,
+		     sep + 1) == SRFS_MAXPATHLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
 
 	return (1);
 }
@@ -330,7 +532,7 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 
 	resp->size = sizeof(srfs_response_t) + replsize;
 
-	for (idx = 0; (dire = readdir(dirp));) {
+	for (idx = 0; (dire = readdir(dirp)); idx++) {
 		if (idx < offset)
 			continue;
 
@@ -345,6 +547,28 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	}
 
 	closedir(dirp);
+
+	return (1);
+}
+
+static int
+srfs_create(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	int fd, mode;
+
+	if (!srfs_get_path_nonexistent(req, path))
+		return (srfs_errno_response(resp));
+
+	if (SRFS_IOBUF_LEFT(req) != sizeof(int))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	mode = srfs_iobuf_get32(req);
+
+	if ((fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, mode)) == -1)
+		return (srfs_errno_response(resp));
+
+	close(fd);
 
 	return (1);
 }
@@ -414,9 +638,169 @@ srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	}
 	fclose(f);
 
-	printf("write(%s, %ld, %ld): %ld\n", path, offset, size, len);
-
 	resp->ptr += len;
+
+	return (1);
+}
+
+static int
+srfs_access(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	int mode;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (SRFS_IOBUF_LEFT(req) != sizeof(int))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	mode = srfs_iobuf_get32(req);
+
+	if (access(path, mode) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_unlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (unlink(path) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_mkdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	mode_t mode;
+
+	if (!srfs_get_path_nonexistent(req, path))
+		return (srfs_errno_response(resp));
+
+	if (SRFS_IOBUF_LEFT(req) != sizeof(mode_t))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	mode = srfs_iobuf_get16(req);
+
+	if (mkdir(path, mode) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_rmdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (rmdir(path) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_chmod(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	mode_t mode;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (SRFS_IOBUF_LEFT(req) != sizeof(mode_t))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	mode = srfs_iobuf_get16(req) & 07777;
+
+	if (chmod(path, mode) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_chown(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	char *usr, *grp;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if (!(usr = srfs_iobuf_getstr(req)))
+		return (srfs_err_response(resp, SRFS_EIO));
+	if (!(grp = srfs_iobuf_getstr(req)))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	if (chown(path, srfs_uidbyname(usr), srfs_gidbyname(grp)) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_readlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	char lnk[MAXPATHLEN + 1];
+	ssize_t n;
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	if ((n = readlink(path, lnk, MAXPATHLEN)) == -1)
+		return (srfs_errno_response(resp));
+	lnk[n] = '\0';
+
+	if (!srfs_iobuf_addstr(resp, lnk))
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	return (1);
+}
+
+static int
+srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
+
+	if (!srfs_get_path_nonexistent(req, src))
+		return (srfs_errno_response(resp));
+
+	if (!srfs_get_path_nonexistent(req, dst))
+		return (srfs_errno_response(resp));
+
+	if (link(src, dst) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
+
+	if (!srfs_get_path_nonexistent(req, src))
+		return (srfs_errno_response(resp));
+
+	if (!srfs_get_path_nonexistent(req, dst))
+		return (srfs_errno_response(resp));
+
+	if (symlink(src, dst) == -1)
+		return (srfs_errno_response(resp));
 
 	return (1);
 }
@@ -428,6 +812,8 @@ srfs_request_handle(srfs_request_t *req)
 	srfs_response_t resp, *r;
 	srfs_iobuf_t sendbuf;
 	srfs_iobuf_t reqbuf;
+//	uid_t uid;
+//	gid_t gid;
 
 	req->r_size = ntohs(req->r_size);
 	req->r_opcode = ntohs(req->r_opcode);
@@ -454,9 +840,16 @@ srfs_request_handle(srfs_request_t *req)
 	}
 
 	if (req->r_opcode >= SRFS_OPCODE_MAX)
-		svrfunc = srfs_funcprocs[SRFS_OPCODE_MAX].func;
+		svrfunc = srfs_server_funcs[SRFS_OPCODE_MAX];
 	else
-		svrfunc = srfs_funcprocs[req->r_opcode].func;
+		svrfunc = srfs_server_funcs[req->r_opcode];
+
+	/* override function if we need client authentication */
+	if (!client_authenticated) {
+		if (req->r_opcode != SRFS_MOUNT &&
+		    req->r_opcode != SRFS_LOGIN)
+			svrfunc = srfs_need_auth;
+	}
 
 	if (svrfunc(&reqbuf, &sendbuf)) {
 		r = SRFS_IOBUF_RESPONSE(&sendbuf);
@@ -465,6 +858,13 @@ srfs_request_handle(srfs_request_t *req)
 		r->r_errno = htons(r->r_errno);
 		srfs_sock_write_sync(sendbuf.buf, sendbuf.size);
 	}
+
+//	if (getuid() == 0) {
+//		uid = srfs_uidbyname("nobody");
+//		gid = srfs_uidbyname("nogroup");
+//		seteuid(uid);
+//		setegid(gid);
+//	}
 }
 
 char *

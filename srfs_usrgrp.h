@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -38,5 +38,15 @@ extern uid_t srfs_uidbyname(char *usrname);
 
 extern char *srfs_namebygid(gid_t gid);
 extern uid_t srfs_gidbyname(char *grpname);
+
+extern void srfs_usrconv_set(char *lcl_usr, char *rmt_usr);
+extern char *srfs_usrconv(char *usrname);
+
+extern char *srfs_homebyuid(uid_t uid);
+extern gid_t srfs_gidbyuid(uid_t uid);
+
+extern void sfrs_set_authenticated(char *usrname);
+extern int srfs_usr_authenticated(char *usrname);
+extern int srfs_uid_authenticated(uid_t uid);
 
 #endif

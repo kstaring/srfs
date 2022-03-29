@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -31,14 +31,14 @@
 #define _SRFS_CONFIG_H
 
 #define SRFS_BASE_CONFIG_PATH "/etc/srfs"
-#define SRFS_CONFIG_FILE SRFS_BASE_CONFIG_PATH "/sfrsd.conf"
+#define SRFS_CONFIG_FILE SRFS_BASE_CONFIG_PATH "/srfsd.conf"
 #define SRFS_EXPORTS_FILE SRFS_BASE_CONFIG_PATH "/exports"
-#define SRFS_CLIENT_KEYS_FILE SRFS_BASE_CONFIG_PATH "/sfrs_client_keys"
-#define SRFS_CLIENT_KEYS_DIR SRFS_BASE_CONFIG_PATH "/sfrs_client_keys.d"
+#define SRFS_CLIENT_KEYS_DIR SRFS_BASE_CONFIG_PATH "/srfs_client_keys.d"
 
 #define SRFS_AUTH_SOCKET "/var/run/srfs_auth.sock"
 
-#define SRFS_SERVER_PRIVKEY SRFS_BASE_CONFIG_PATH "/srfs_host_key"
-#define SRFS_SERVER_PUBKEY SRFS_SERVER_PRIVKEY ".pub"
+#define SRFS_HOST_PRIVKEY SRFS_BASE_CONFIG_PATH "/host.key"
+#define SRFS_HOST_PUBKEY SRFS_BASE_CONFIG_PATH "/host.pub"
+#define SRFS_HOST_CERT SRFS_BASE_CONFIG_PATH "/host.crt"
 
 #endif

@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,8 @@
 #define SRFS_MAXLOGNAMELEN 33	/* maximum length of a username incl NULL */
 #define SRFS_MAXGRPNAMELEN 33	/* maximum length of a group name incl NULL */
 
+#define SRFS_CHALLENGE_SZ 64	/* size of random challenge string */
+
 #define SRFS_READDIR_BUFSZ 1024	/* default size of READDIR buffer size */ 
 
 /* SRFS opcodes */
@@ -50,15 +52,28 @@
 
 #define SRFS_LOGIN	2	/* Login a client user */
 
-#define SRFS_READDIR	3	/* Read the next entry from the directory */
+#define SRFS_READDIR	3	/* Read entries from the directory */
 
 #define SRFS_STAT	4	/* Get file info */
-#define SRFS_READ	5	/* Read data from a file */
-#define SRFS_WRITE	6	/* Write data to a file */
+#define SRFS_CREATE	5	/* Create a file */
+#define SRFS_READ	6	/* Read data from a file */
+#define SRFS_WRITE	7	/* Write data to a file */
 
-#define SRFS_ACCESS	7	/* Check file access */
+#define SRFS_ACCESS	8	/* Check file access */
 
-#define SRFS_OPCODE_MAX	8	/* Defines the number of opcodes */
+#define SRFS_CHMOD	9	/* Change file mode */
+#define SRFS_CHOWN	10	/* Change file owner and group */
+
+#define SRFS_MKDIR	11	/* Create a directory */
+#define SRFS_RMDIR	12	/* Remove a directory */
+
+#define SRFS_LINK	13	/* Create a hard link */
+#define SRFS_SYMLINK	14	/* Create a symbolic link */
+#define SRFS_READLINK	15	/* Read the contents of a symbolic link */
+
+#define SRFS_UNLINK	16	/* Remove a file */
+
+#define SRFS_OPCODE_MAX	17	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0
@@ -79,7 +94,19 @@
 #define SRFS_EAGAIN	31
 #define SRFS_ENOTSUP	32
 #define SRFS_ENAMETOOLONG 33
+#define SRFS_ENEEDAUTH	32767
 
+/* SRFS authentication types */
+#define SRFS_AUTH_HOST	0	/* Authenticate the SRFS client system */
+#define SRFS_AUTH_SRFS	1	/* Authenticate a user using the ~/.srfs/
+				 * keypair */
+#define SRFS_AUTH_SSH	2	/* Authenticate a user using an SSH keypair */
+#define SRFS_AUTH_PWD	3	/* Authenticate a user by user/pass */
+#define SRFS_AUTH_MAX	4	/* Defines the number of auth types */
+
+
+/* SRFS types an structs */
+typedef uint8_t srfs_auth_t;	/* Authentication type used by SRFS_LOGIN */
 typedef uint64_t srfs_id_t;	/* Every request has a unique ID
 				 * included by the response. */
 typedef uint16_t srfs_size_t;	/* size of payload data */

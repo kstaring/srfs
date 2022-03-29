@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+
+extern char *sign_challenge(void);
 
 extern char *peername(struct sockaddr_storage *addr);
 

@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -45,9 +45,11 @@
 #include <fuse_opt.h>
 #include <fuse_lowlevel.h>
 
+#include "srfs_pki.h"
 #include "srfs_fuse.h"
 #include "srfs_sock.h"
 #include "srfs_client.h"
+#include "srfs_usrgrp.h"
 
 static void sigint(int signal);
 _Noreturn static void srfs_usage(void);
@@ -66,6 +68,15 @@ static int srfs_fuse_write(const char *path, const char *buffer, size_t size,
 static int srfs_fuse_create(const char *path, mode_t mode,
 			    struct fuse_file_info *fi);
 static int srfs_fuse_truncate(const char *path, off_t offset);
+static int srfs_fuse_access(const char *path, int mode);
+static int srfs_fuse_unlink(const char *path);
+static int srfs_fuse_mkdir(const char *path, mode_t mode);
+static int srfs_fuse_rmdir(const char *path);
+static int srfs_fuse_chmod(const char *path, mode_t mode);
+static int srfs_fuse_chown(const char *path, uid_t uid, gid_t gid);
+static int srfs_fuse_link(const char *to, const char *from);
+static int srfs_fuse_symlink(const char *to, const char *from);
+static int srfs_fuse_readlink(const char *path, char *buf, size_t size);
 
 /*static const struct fuse_opt opts[] = {
 	FUSE_OPT_END
@@ -80,7 +91,16 @@ static struct fuse_operations fops = {
 	.read = srfs_fuse_read,
 	.write = srfs_fuse_write,
 	.create = srfs_fuse_create,
-	.truncate = srfs_fuse_truncate
+	.truncate = srfs_fuse_truncate,
+	.access = srfs_fuse_access,
+	.unlink = srfs_fuse_unlink,
+	.mkdir = srfs_fuse_mkdir,
+	.rmdir = srfs_fuse_rmdir,
+	.chown = srfs_fuse_chown,
+	.chmod = srfs_fuse_chmod,
+	.link = srfs_fuse_link,
+	.symlink = srfs_fuse_symlink,
+	.readlink = srfs_fuse_readlink,
 };
 
 static struct fuse *fuse = NULL;
@@ -107,15 +127,30 @@ srfs_usage(void)
 	exit(1);
 }
 
+inline static void
+srfs_fuse_setusrctx(void)
+{
+	struct fuse_context *ctx;
+
+	ctx = fuse_get_context();
+
+	srfs_set_usrctx(ctx->uid, ctx->gid);
+
+	if (!srfs_uid_authenticated(ctx->uid))
+		srfs_client_user_login();
+}
+
 static int
 srfs_fuse_statfs(const char *path, struct statvfs *vfs)
 {
+	srfs_fuse_setusrctx();
 	return (srfs_client_statvfs((char *)path, vfs) ? 0 : -errno);
 }
 
 static int
 srfs_fuse_getattr(const char *path, struct stat *st)
 {
+	srfs_fuse_setusrctx();
 	return (srfs_client_stat((char *)path, st) ? 0 : -errno);
 }
 
@@ -139,6 +174,8 @@ srfs_fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
 	srfs_dirent_t *item;
 	struct stat st = { 0 };
 
+	srfs_fuse_setusrctx();
+
 	errno = 0;
 	if ((list = srfs_client_opendir((char *)path, offset))) {
 		while ((item = srfs_client_readdir(list))) {
@@ -158,6 +195,8 @@ srfs_fuse_read(const char *path, char *buf, size_t sz, off_t offset,
 {
 	size_t size;
 	int r, rs;
+
+	srfs_fuse_setusrctx();
 
 	for (size = sz; size > 0; size -= r) {
 		rs = MIN(1024, size);
@@ -180,6 +219,8 @@ srfs_fuse_write(const char *path, const char *buffer, size_t size,
 {
 	int res;
 
+	srfs_fuse_setusrctx();
+
 	if (!(res = srfs_client_write((char *)path, offset, size,
 				      (char *)buffer)))
 		return (-errno);
@@ -188,14 +229,111 @@ srfs_fuse_write(const char *path, const char *buffer, size_t size,
 }
 
 static int
+srfs_fuse_access(const char *path, int mode)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_access((char *)path, mode))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_unlink(const char *path)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_unlink((char *)path))
+		return (-errno);
+
+	return (0);
+}
+
+static int
 srfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-	return (-ENOSYS);
+	srfs_fuse_setusrctx();
+	if (!srfs_client_create((char *)path, mode))
+		return (-errno);
+
+	return (0);
 }
 
 static int
 srfs_fuse_truncate(const char *path, off_t offset)
 {
+	char buf[1];
+
+	srfs_fuse_setusrctx();
+	return (srfs_fuse_write(path, buf, 0, offset, NULL));
+}
+
+static int
+srfs_fuse_mkdir(const char *path, mode_t mode)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_mkdir((char *)path, mode))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_rmdir(const char *path)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_rmdir((char *)path))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_chown(const char *path, uid_t uid, gid_t gid)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_chown((char *)path, uid, gid))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_chmod(const char *path, mode_t mode)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_chmod((char *)path, mode))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_link(const char *to, const char *from)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_link((char *)to, (char *)from))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_symlink(const char *to, const char *from)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_symlink((char *)to, (char *)from))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_readlink(const char *path, char *buf, size_t size)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_readlink((char *)path, buf, size))
+		return (-errno);
+
 	return (0);
 }
 
@@ -298,10 +436,13 @@ srfs_connect(char *server_path)
 	path = sep + 1;
 
 	if (!srfs_sock_connect(server))
-		err(errno, "Couldn't connect to server %s\n", server);
+		err(errno, "Couldn't connect to server %s", server);
 
-	if (!srfs_mount(path))
-		err(0, "Couldn't mount\n");
+	if (!srfs_client_host_login())
+		printf("Couldn't login with client host key");
+
+	if (!srfs_client_mount(path))
+		err(errno, "Couldn't mount");
 
 	return (1);
 }
@@ -319,6 +460,8 @@ main(int argc, char *argv[])
 
 	if (!srfs_sock_client_init())
 		return (1);
+
+	srfs_load_hostkeys();
 
 	if (!srfs_connect(serverpath))
 		srfs_usage();

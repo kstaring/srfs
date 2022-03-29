@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@
 #include <err.h>
 #include <poll.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -46,15 +47,24 @@
 #include <openssl/err.h>
 #include <openssl/crypto.h>
 
+#include "srfs_pki.h"
+#include "srfs_sock.h"
 #include "srfs_config.h"
 #include "srfs_protocol.h"
-#include "srfs_sock.h"
 
 static int sock_fd;
 static SSL_CTX *ctx = NULL;
 static SSL *ssl = NULL;
 
+static char challenge[SRFS_CHALLENGE_SZ];
+
 static int srfs_sock_generic_init(const SSL_METHOD *method);
+
+char *
+sign_challenge(void)
+{
+	return (challenge);
+}
 
 char *
 peername(struct sockaddr_storage *addr)
@@ -122,7 +132,7 @@ srfs_accept_client(void)
 {
 	struct sockaddr_storage a;
 	socklen_t len;
-	int fd;
+	int fd, rd, r;
 
 	if ((fd = accept(sock_fd, (struct sockaddr *)&a, &len)) == -1) {
 		perror("accept() failed");
@@ -140,6 +150,20 @@ srfs_accept_client(void)
 	}
 
 	srfs_sock_write_sync(SRFS_IDENT, strlen(SRFS_IDENT));
+
+	if ((fd = open("/dev/urandom", O_RDONLY)) == -1) {
+		perror("open(/dev/urandom)");
+		exit(1);
+	}
+	for (r = 0; r != SRFS_CHALLENGE_SZ; r += rd) {
+		if ((rd = read(fd, challenge, SRFS_CHALLENGE_SZ)) == -1) {
+			perror("read(/dev/urandom)");
+			exit(1);
+		}
+	}
+	close(fd);
+
+	srfs_sock_write_sync(challenge, SRFS_CHALLENGE_SZ);
 }
 
 static int
@@ -175,14 +199,14 @@ srfs_sock_server_init(void)
 	if (!srfs_sock_generic_init(TLS_server_method()))
 		return (0);
 
-	if (SSL_CTX_use_certificate_file(ctx, SRFS_SERVER_PUBKEY,
+	if (SSL_CTX_use_certificate_file(ctx, SRFS_HOST_CERT,
 					 SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_SERVER_PUBKEY);
+		printf("Couldn't read %s\n", SRFS_HOST_CERT);
 		return (0);
 	}
-	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_SERVER_PRIVKEY,
+	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_HOST_PRIVKEY,
 					SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_SERVER_PRIVKEY);
+		printf("Couldn't read %s\n", SRFS_HOST_PRIVKEY);
 		return (0);
 	}
 
@@ -292,6 +316,8 @@ srfs_sock_connect(char *server)
 		srfs_sock_close();
 		return (0);
 	}
+
+	srfs_sock_read_sync(challenge, SRFS_CHALLENGE_SZ);
 
 	return (1);
 }

@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -37,9 +37,12 @@
 
 typedef struct srfs_dirlist srfs_dirlist_t;
 
-extern int srfs_request_sync(srfs_opcode_t opcode, void *result);
+extern void srfs_set_usrctx(uid_t uid, gid_t gid);
+extern int srfs_client_user_login(void);
 
-extern int srfs_mount(char *share);
+extern int srfs_client_host_login(void);
+
+extern int srfs_client_mount(char *share);
 
 extern int srfs_client_statvfs(char *share, struct statvfs *vfs);
 
@@ -51,6 +54,21 @@ extern void srfs_client_closedir(srfs_dirlist_t *dirlist);
 
 extern int srfs_client_read(char *path, off_t offset, size_t size, char *buf);
 extern int srfs_client_write(char *path, off_t offset, size_t size, char *buf);
+
+extern int srfs_client_access(char *path, int mode);
+extern int srfs_client_create(char *path, int mode);
+
+extern int srfs_client_unlink(char *path);
+
+extern int srfs_client_mkdir(char *path, mode_t mode);
+extern int srfs_client_rmdir(char *path);
+
+extern int srfs_client_chown(char *path, uid_t uid, gid_t gid);
+extern int srfs_client_chmod(char *path, mode_t mode);
+
+extern int srfs_client_link(char *pointee, char *pointer);
+extern int srfs_client_symlink(char *pointee, char *pointer);
+extern int srfs_client_readlink(char *path, char *buf, size_t size);
 
 extern srfs_id_t srfs_serial(void);
 extern int srfs_request(srfs_opcode_t opcode);

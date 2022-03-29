@@ -1,7 +1,7 @@
 /*
  * BSD 2-Clause License
  * 
- * Copyright (c) 2022, Khamba Staring <qdk@quickdekay.net>
+ * Copyright (c) 2022, Khamba Staring <staring@blingbsd.org>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,20 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "srfs_usrgrp.h"
 #include "srfs_protocol.h"
+
+typedef struct srfs_authuser {
+	char usrname[SRFS_MAXLOGNAMELEN];
+	uid_t uid;
+	gid_t gid;
+} srfs_authuser_t;
+
+static srfs_authuser_t *authusers = NULL;
 
 char *
 srfs_namebyuid(uid_t uid)
@@ -58,6 +68,20 @@ srfs_uidbyname(char *usrname)
 	return (65534);
 }
 
+gid_t
+srfs_gidbyuid(uid_t uid)
+{
+	struct passwd *pwd;
+
+	if (!(pwd = getpwuid(uid)))
+		pwd = getpwnam("nobody");
+
+	if (pwd)
+		return (pwd->pw_gid);
+
+	return (65534);
+}
+
 char *srfs_namebygid(gid_t gid)
 {
 	struct group *grp;
@@ -80,4 +104,67 @@ uid_t srfs_gidbyname(char *grpname)
 		return (grp->gr_gid);
 
 	return (65533);
+}
+
+char *
+srfs_homebyuid(uid_t uid)
+{
+	struct passwd *pwd;
+
+	if ((pwd = getpwuid(uid)))
+		return (pwd->pw_dir);
+
+	return (NULL);
+}
+
+void
+sfrs_set_authenticated(char *usrname)
+{
+	uid_t uid;
+	gid_t gid;
+
+	uid = srfs_uidbyname(usrname);
+	if (!uid)
+		return;
+
+	gid = srfs_gidbyuid(uid);
+
+	if (!authusers)
+		authusers = calloc(1, sizeof(srfs_authuser_t) * 10);
+
+	for (int i = 0; i < 10; i++) {
+		if (!authusers[i].uid) {
+			strcpy(authusers[i].usrname, usrname);
+			authusers[i].uid = uid;
+			authusers[i].gid = gid;
+			return;
+		}
+	}
+printf("auth overflow!\n");
+}
+
+int
+srfs_usr_authenticated(char *usrname)
+{
+	if (!authusers)
+		return (0);
+
+	for (int i = 0; i < 10; i++)
+		if (strcmp(authusers[i].usrname, usrname) == 0)
+			return (1);
+
+	return (0);
+}
+
+int
+srfs_uid_authenticated(uid_t uid)
+{
+	if (!uid || !authusers)
+		return (0);
+
+	for (int i = 0; i < 10; i++)
+		if (authusers[i].uid == uid)
+			return (1);
+
+	return (0);
 }
