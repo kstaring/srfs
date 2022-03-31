@@ -30,17 +30,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 
 #include "srfs_usrgrp.h"
 #include "srfs_protocol.h"
 
-typedef struct srfs_authuser {
+struct srfs_authuser {
 	char usrname[SRFS_MAXLOGNAMELEN];
 	uid_t uid;
 	gid_t gid;
-} srfs_authuser_t;
+	LIST_ENTRY(srfs_authuser) list;
+};
+LIST_HEAD(authusers, srfs_authuser);
+struct authusers authusers = LIST_HEAD_INITIALIZER(authusers);
 
-static srfs_authuser_t *authusers = NULL;
+void
+srfs_usrgrp_init(void)
+{
+	LIST_INIT(&authusers);
+}
 
 char *
 srfs_namebyuid(uid_t uid)
@@ -120,6 +128,7 @@ srfs_homebyuid(uid_t uid)
 void
 sfrs_set_authenticated(char *usrname)
 {
+	struct srfs_authuser *user;
 	uid_t uid;
 	gid_t gid;
 
@@ -129,28 +138,24 @@ sfrs_set_authenticated(char *usrname)
 
 	gid = srfs_gidbyuid(uid);
 
-	if (!authusers)
-		authusers = calloc(1, sizeof(srfs_authuser_t) * 10);
+	user = malloc(sizeof(struct srfs_authuser));
+	strcpy(user->usrname, usrname);
+	user->uid = uid;
+	user->gid = gid;
 
-	for (int i = 0; i < 10; i++) {
-		if (!authusers[i].uid) {
-			strcpy(authusers[i].usrname, usrname);
-			authusers[i].uid = uid;
-			authusers[i].gid = gid;
-			return;
-		}
-	}
-printf("auth overflow!\n");
+	LIST_INSERT_HEAD(&authusers, user, list);
 }
 
 int
 srfs_usr_authenticated(char *usrname)
 {
-	if (!authusers)
+	struct srfs_authuser *user;
+
+	if (!(user = LIST_FIRST(&authusers)))
 		return (0);
 
-	for (int i = 0; i < 10; i++)
-		if (strcmp(authusers[i].usrname, usrname) == 0)
+	while ((user = LIST_NEXT(user, list)))
+		if (strcmp(user->usrname, usrname) == 0)
 			return (1);
 
 	return (0);
@@ -159,11 +164,13 @@ srfs_usr_authenticated(char *usrname)
 int
 srfs_uid_authenticated(uid_t uid)
 {
-	if (!uid || !authusers)
+	struct srfs_authuser *user;
+
+	if (!(user = LIST_FIRST(&authusers)))
 		return (0);
 
-	for (int i = 0; i < 10; i++)
-		if (authusers[i].uid == uid)
+	while ((user = LIST_NEXT(user, list)))
+		if (user->uid == uid)
 			return (1);
 
 	return (0);

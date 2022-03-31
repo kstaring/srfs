@@ -222,6 +222,8 @@ srfs_sock_read_sync(char *buf, size_t size)
 		r = SSL_read(ssl, buf, size);
 		if (r <= 0 && r != EINTR)
 			return (-1);
+
+		buf += r;
 	}
 
 	return (res);
@@ -236,6 +238,8 @@ srfs_sock_write_sync(char *buf, size_t size)
 		w = SSL_write(ssl, buf, size);
 		if (w <= 0 && w != EINTR)
 			return (-1);
+
+		buf += w;
 	}
 
 	return (res);

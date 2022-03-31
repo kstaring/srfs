@@ -43,8 +43,6 @@
 
 #define SRFS_CHALLENGE_SZ 64	/* size of random challenge string */
 
-#define SRFS_READDIR_BUFSZ 1024	/* default size of READDIR buffer size */ 
-
 /* SRFS opcodes */
 #define SRFS_MOUNT	0	/* Mount a remote filesystem / directory */
 
@@ -73,7 +71,9 @@
 
 #define SRFS_UNLINK	16	/* Remove a file */
 
-#define SRFS_OPCODE_MAX	17	/* Defines the number of opcodes */
+#define SRFS_RENAME	17	/* Remove a file */
+
+#define SRFS_OPCODE_MAX	18	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0
@@ -109,20 +109,20 @@
 typedef uint8_t srfs_auth_t;	/* Authentication type used by SRFS_LOGIN */
 typedef uint64_t srfs_id_t;	/* Every request has a unique ID
 				 * included by the response. */
-typedef uint16_t srfs_size_t;	/* size of payload data */
+typedef uint32_t srfs_bufsz_t;	/* size of payload data */
 typedef uint16_t srfs_opcode_t;	/* request opcode */
 typedef uint16_t srfs_errno_t;	/* error code */
 
 typedef struct __attribute__((__packed__)) srfs_request {
 	srfs_id_t r_serial;
-	srfs_size_t r_size;
+	srfs_bufsz_t r_size;
 	srfs_opcode_t r_opcode;
 	/* payload data... */
 } srfs_request_t;
 
 typedef struct __attribute__((__packed__)) srfs_response {
 	srfs_id_t r_serial;
-	srfs_size_t r_size;
+	srfs_bufsz_t r_size;
 	srfs_errno_t r_errno;
 	/* payload data... */
 } srfs_response_t;
@@ -154,7 +154,8 @@ typedef uint32_t srfs_nsec_t;
 typedef uint64_t srfs_off_t;
 typedef uint32_t srfs_blksize_t;
 typedef uint64_t srfs_blkcnt_t;
-typedef uint16_t srfs_mode_t;
+typedef uint32_t srfs_mode_t;
+typedef uint8_t srfs_usrgrpsz_t;
 
 typedef struct __attribute__((__packed__)) srfs_timespec {
 	srfs_time_t tv_sec;
@@ -173,7 +174,6 @@ typedef struct __attribute__((__packed__)) srfs_stat {
 	srfs_dev_t st_dev;
 	srfs_nlink_t st_nlink;
 	srfs_fflags_t st_flags;
-	srfs_size_t st_usrgrpsz;	/* size of trailing user & group str */
 	/* null-terminated user- and groupname... */
 } srfs_stat_t;
 

@@ -70,7 +70,8 @@ static char *srfs_opcodes[] = {
 	"SRFS_LINK",
 	"SRFS_SYMLINK",
 	"SRFS_READLINK",
-	"SRFS_UNLINK"
+	"SRFS_UNLINK",
+	"SRFS_RENAME"
 };
 
 static int srfs_get_path(srfs_iobuf_t *req, char *path);
@@ -97,6 +98,7 @@ static int srfs_chmod(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_readlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_rename(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
 static srfs_server_func_t srfs_server_funcs[] = {
 	srfs_mount,			// SRFS_MOUNT
@@ -116,13 +118,26 @@ static srfs_server_func_t srfs_server_funcs[] = {
 	srfs_symlink,			// SRFS_SYMLINK
 	srfs_readlink,			// SRFS_READLINK
 	srfs_unlink,			// SRFS_UNLINK
+	srfs_rename,			// SRFS_RENAME
 	srfs_invalid_opcode		// SRFS_OPCODE_MAX
 };
 
 static int client_authenticated = 0;
 
-/* TODO only temporary, POC */
+static srfs_iobuf_t *reqbuf = NULL;
+static srfs_iobuf_t *respbuf = NULL;
+
+/* Only one mounted filesystem per connection for now */
 static srfs_export_t *exported = NULL;
+
+void
+srfs_server_init(void)
+{
+	reqbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
+	respbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
+
+	srfs_usrgrp_init();
+}
 
 static int
 srfs_localpath(srfs_export_t *export, char *path, char *dstpath)
@@ -322,6 +337,9 @@ srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	srfs_export_t *export;
 	char *share;
 
+	if (exported)
+		return (srfs_err_response(resp, SRFS_EXIST));
+
 	if (req->size > SRFS_MAXNAMLEN + 1)
 		return (srfs_err_response(resp, SRFS_ENAMETOOLONG));
 
@@ -366,14 +384,9 @@ srfs_get_usrctx(srfs_iobuf_t *req)
 }
 
 static int
-srfs_get_path(srfs_iobuf_t *req, char *path)
+srfs_translate_path(srfs_iobuf_t *req, char *path)
 {
 	char *spath;
-
-	if (!srfs_get_usrctx(req)) {
-		errno = EIO;
-		return (0);
-	}
 
 	if (!(spath = srfs_iobuf_getstr(req))) {
 		errno = EIO;
@@ -392,15 +405,10 @@ srfs_get_path(srfs_iobuf_t *req, char *path)
 }
 
 static int
-srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path)
+srfs_translate_path_nonexistent(srfs_iobuf_t *req, char *path)
 {
 	char tmp[SRFS_MAXPATHLEN + 1];
 	char *spath, *sep;
-
-	if (!srfs_get_usrctx(req)) {
-		errno = EIO;
-		return (0);
-	}
 
 	if (!(spath = srfs_iobuf_getstr(req))) {
 		errno = EIO;
@@ -426,6 +434,34 @@ srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path)
 		errno = ENAMETOOLONG;
 		return (0);
 	}
+
+	return (1);
+}
+
+static int
+srfs_get_path(srfs_iobuf_t *req, char *path)
+{
+	if (!srfs_get_usrctx(req)) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!srfs_translate_path(req, path))
+		return (0);
+
+	return (1);
+}
+
+static int
+srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path)
+{
+	if (!srfs_get_usrctx(req)) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!srfs_translate_path_nonexistent(req, path))
+		return (0);
 
 	return (1);
 }
@@ -471,10 +507,10 @@ srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	srfs_stat_t rst;
 	struct stat st;
 
-	if (!srfs_get_path(req, path))
+	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
 
-	if (stat(path, &st) != 0)
+	if (lstat(path, &st) != 0)
 		return (srfs_errno_response(resp));
 
 	usrname = srfs_namebyuid(st.st_uid);
@@ -490,11 +526,10 @@ srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	rst.st_ctim.tv_sec = htobe64(st.st_ctim.tv_sec);
 	rst.st_ctim.tv_nsec = htobe32(st.st_ctim.tv_nsec);
 	rst.st_blksize = htobe32(st.st_blksize);
-	rst.st_mode = htons(st.st_mode);
+	rst.st_mode = htobe32(st.st_mode);
 	rst.st_dev = htons(st.st_dev);
 	rst.st_nlink = htons(st.st_nlink);
 	rst.st_flags = htons(st.st_flags);
-	rst.st_usrgrpsz = htons(strlen(usrname) + strlen(grpname) + 2);
 
 	if (!srfs_iobuf_addptr(resp, (char *)&rst, sizeof(srfs_stat_t)))
 		return (srfs_err_response(resp, SRFS_EIO));
@@ -511,7 +546,7 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	srfs_off_t offset, idx;
-	srfs_size_t replsize;
+	srfs_bufsz_t replsize;
 	struct dirent *dire;
 	srfs_dirent_t rde;
 	size_t len;
@@ -520,12 +555,12 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
-	if (SRFS_IOBUF_LEFT(req) != sizeof(srfs_off_t) + sizeof(srfs_size_t))
+	if (SRFS_IOBUF_LEFT(req) != sizeof(srfs_off_t) + sizeof(srfs_bufsz_t))
 		return (srfs_err_response(resp, SRFS_EIO));
 
 	offset = srfs_iobuf_get64(req);
-	replsize = srfs_iobuf_get16(req);
-	replsize = MIN(SRFS_READDIR_BUFSZ, replsize);
+	replsize = srfs_iobuf_get32(req);
+	replsize = MIN(SRFS_IOBUF_LEFT(resp), replsize);
 
 	if (!(dirp = opendir(path)))
 		return (srfs_errno_response(resp));
@@ -578,7 +613,8 @@ srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	srfs_off_t offset;
-	size_t len, size;
+	ssize_t len;
+	size_t size;
 	FILE *f;
 
 	if (!srfs_get_path(req, path))
@@ -586,9 +622,9 @@ srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 
 	offset = srfs_iobuf_get64(req);
 	size = srfs_iobuf_get64(req);
-	size = MIN(MIN(1024, size), resp->size);
+	size = MIN(size, SRFS_IOBUF_LEFT(resp));
 
-	if (!(f = fopen(path, "r")))
+	if (!(f = fopen(path, "re")))
 		return (srfs_errno_response(resp));
 
 	if (offset) {
@@ -614,8 +650,10 @@ srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	srfs_off_t offset;
-	size_t len, size;
+	size_t size;
+	char *ostr;
 	FILE *f;
+	int w;
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
@@ -623,22 +661,27 @@ srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	offset = srfs_iobuf_get64(req);
 	size = SRFS_IOBUF_LEFT(req);
 
-	if (!(f = fopen(path, "w")))
+	ostr = offset ? "ae" : "we";
+	if (!(f = fopen(path, ostr)))
 		return (srfs_errno_response(resp));
 
-	if (offset) {
+	if (offset && offset != ftello(f)) {
 		if (fseek(f, offset, SEEK_SET) == -1) {
 			fclose(f);
 			return (srfs_errno_response(resp));
 		}
 	}
-	if ((len = fwrite(req->ptr, 1, size, f)) == -1) {
-		fclose(f);
-		return (srfs_errno_response(resp));
+	for (; size != 0;) {
+		if ((w = fwrite(req->ptr, 1, size, f)) == -1) {
+			if (errno == EINTR)
+				continue;
+			fclose(f);
+			return (srfs_errno_response(resp));
+		}
+		size -= w;
+		req->ptr += w;
 	}
 	fclose(f);
-
-	resp->ptr += len;
 
 	return (1);
 }
@@ -668,7 +711,7 @@ srfs_unlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 
-	if (!srfs_get_path(req, path))
+	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
 
 	if (unlink(path) == -1)
@@ -758,7 +801,7 @@ srfs_readlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	char lnk[MAXPATHLEN + 1];
 	ssize_t n;
 
-	if (!srfs_get_path(req, path))
+	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
 
 	if ((n = readlink(path, lnk, MAXPATHLEN)) == -1)
@@ -779,7 +822,7 @@ srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	if (!srfs_get_path_nonexistent(req, src))
 		return (srfs_errno_response(resp));
 
-	if (!srfs_get_path_nonexistent(req, dst))
+	if (!srfs_translate_path_nonexistent(req, dst))
 		return (srfs_errno_response(resp));
 
 	if (link(src, dst) == -1)
@@ -791,15 +834,37 @@ srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 static int
 srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
+	char *src, dst[SRFS_MAXPATHLEN + 1];
 
-	if (!srfs_get_path_nonexistent(req, src))
+	if (!srfs_get_usrctx(req)) {
+		errno = EIO;
+		return (0);
+	}
+
+	if (!(src = srfs_iobuf_getstr(req)))
 		return (srfs_errno_response(resp));
 
-	if (!srfs_get_path_nonexistent(req, dst))
+	if (!srfs_translate_path_nonexistent(req, dst))
 		return (srfs_errno_response(resp));
 
 	if (symlink(src, dst) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_rename(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
+
+	if (!srfs_get_path(req, src))
+		return (srfs_errno_response(resp));
+
+	if (!srfs_translate_path_nonexistent(req, dst))
+		return (srfs_errno_response(resp));
+
+	if (rename(src, dst) == -1)
 		return (srfs_errno_response(resp));
 
 	return (1);
@@ -810,33 +875,33 @@ srfs_request_handle(srfs_request_t *req)
 {
 	srfs_server_func_t svrfunc;
 	srfs_response_t resp, *r;
-	srfs_iobuf_t sendbuf;
-	srfs_iobuf_t reqbuf;
 //	uid_t uid;
 //	gid_t gid;
 
-	req->r_size = ntohs(req->r_size);
+	req->r_size = be32toh(req->r_size);
 	req->r_opcode = ntohs(req->r_opcode);
 
-	SRFS_IOBUF_INIT(&reqbuf);
-	SRFS_IOBUF_INIT(&sendbuf);
+	SRFS_IOBUF_RESET(reqbuf);
+	SRFS_IOBUF_RESET(respbuf);
 	resp.r_serial = req->r_serial;
 	resp.r_size = 0;
 	resp.r_errno = SRFS_OK;
-	srfs_iobuf_addptr(&sendbuf, (char *)&resp, sizeof(srfs_response_t));
+	srfs_iobuf_addptr(respbuf, (char *)&resp, sizeof(srfs_response_t));
 
-	if (req->r_size > SRFS_IOBUFSZ) {
-		srfs_err_response(&sendbuf, SRFS_EIO);
-		srfs_sock_write_sync(sendbuf.buf, sizeof(srfs_response_t));
+	if (req->r_size > SRFS_IOBUF_LEFT(respbuf)) {
+		// TODO communicate the maximum amount of bytes the
+		// server will allow so the client can adjust its reqbuf
+		srfs_err_response(respbuf, SRFS_EIO);
+		srfs_sock_write_sync(respbuf->buf, sizeof(srfs_response_t));
 		return;
 	}
 
 	if (req->r_size) {
-		if (!srfs_sock_read_sync(reqbuf.buf, req->r_size))
+		if (!srfs_sock_read_sync(reqbuf->buf, req->r_size))
 			return;
-		reqbuf.size = req->r_size;
+		reqbuf->size = req->r_size;
 	} else {
-		reqbuf.size = 0;
+		reqbuf->size = 0;
 	}
 
 	if (req->r_opcode >= SRFS_OPCODE_MAX)
@@ -851,12 +916,12 @@ srfs_request_handle(srfs_request_t *req)
 			svrfunc = srfs_need_auth;
 	}
 
-	if (svrfunc(&reqbuf, &sendbuf)) {
-		r = SRFS_IOBUF_RESPONSE(&sendbuf);
-		sendbuf.size = SRFS_IOBUF_SIZE(&sendbuf);
-		r->r_size = htons(sendbuf.size - sizeof(srfs_response_t));
+	if (svrfunc(reqbuf, respbuf)) {
+		r = SRFS_IOBUF_RESPONSE(respbuf);
+		respbuf->size = SRFS_IOBUF_SIZE(respbuf);
+		r->r_size = htobe32(respbuf->size - sizeof(srfs_response_t));
 		r->r_errno = htons(r->r_errno);
-		srfs_sock_write_sync(sendbuf.buf, sendbuf.size);
+		srfs_sock_write_sync(respbuf->buf, respbuf->size);
 	}
 
 //	if (getuid() == 0) {

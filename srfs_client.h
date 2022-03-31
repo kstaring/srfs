@@ -37,6 +37,10 @@
 
 typedef struct srfs_dirlist srfs_dirlist_t;
 
+extern void srfs_client_init(void);
+
+extern size_t srfs_maxpacketsize(void);
+
 extern void srfs_set_usrctx(uid_t uid, gid_t gid);
 extern int srfs_client_user_login(void);
 
@@ -69,6 +73,8 @@ extern int srfs_client_chmod(char *path, mode_t mode);
 extern int srfs_client_link(char *pointee, char *pointer);
 extern int srfs_client_symlink(char *pointee, char *pointer);
 extern int srfs_client_readlink(char *path, char *buf, size_t size);
+
+extern int srfs_client_rename(char *src, char *dst);
 
 extern srfs_id_t srfs_serial(void);
 extern int srfs_request(srfs_opcode_t opcode);

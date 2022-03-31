@@ -117,7 +117,6 @@ srfs_rsa_sign(RSA *priv, char *msg, size_t msgsize,
 		res = 1;
 
 srfs_rsa_sign_end:
-	EVP_PKEY_free(privkey);
 	EVP_MD_CTX_free(ctx);
 
 	return (res);
@@ -162,7 +161,6 @@ srfs_rsa_verify(RSA *pub, char *msg, size_t msgsize,
 	res = 1;
 
 srfs_rsa_verify_end:
-	EVP_PKEY_free(pubkey);
 	EVP_MD_CTX_free(ctx);
 
 	return (res);

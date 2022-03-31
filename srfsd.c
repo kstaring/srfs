@@ -157,6 +157,8 @@ main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
+	srfs_server_init();
+
 	if (!srfs_sock_server_init())
 		exit(1);
 

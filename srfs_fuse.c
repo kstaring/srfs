@@ -77,6 +77,7 @@ static int srfs_fuse_chown(const char *path, uid_t uid, gid_t gid);
 static int srfs_fuse_link(const char *to, const char *from);
 static int srfs_fuse_symlink(const char *to, const char *from);
 static int srfs_fuse_readlink(const char *path, char *buf, size_t size);
+static int srfs_fuse_rename(const char *src, const char *dst);
 
 /*static const struct fuse_opt opts[] = {
 	FUSE_OPT_END
@@ -101,6 +102,7 @@ static struct fuse_operations fops = {
 	.link = srfs_fuse_link,
 	.symlink = srfs_fuse_symlink,
 	.readlink = srfs_fuse_readlink,
+	.rename = srfs_fuse_rename
 };
 
 static struct fuse *fuse = NULL;
@@ -135,6 +137,9 @@ srfs_fuse_setusrctx(void)
 	ctx = fuse_get_context();
 
 	srfs_set_usrctx(ctx->uid, ctx->gid);
+
+	if (ctx->uid == 0)
+		return;
 
 	if (!srfs_uid_authenticated(ctx->uid))
 		srfs_client_user_login();
@@ -173,13 +178,15 @@ srfs_fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler,
 	srfs_dirlist_t *list;
 	srfs_dirent_t *item;
 	struct stat st = { 0 };
+	mode_t m;
 
 	srfs_fuse_setusrctx();
 
 	errno = 0;
 	if ((list = srfs_client_opendir((char *)path, offset))) {
 		while ((item = srfs_client_readdir(list))) {
-			st.st_mode = DTTOIF(item->d_type);
+			m = DTTOIF(item->d_type);
+			st.st_mode = DTTOIF(m);
 			filler(buffer, item->d_name, &st, 0);
 			offset++;
 		}
@@ -199,12 +206,9 @@ srfs_fuse_read(const char *path, char *buf, size_t sz, off_t offset,
 	srfs_fuse_setusrctx();
 
 	for (size = sz; size > 0; size -= r) {
-		rs = MIN(1024, size);
+		rs = MIN(srfs_maxpacketsize(), size);
 		if (!(r = srfs_client_read((char *)path, offset, rs, buf)))
 			return (-errno);
-
-		if (r < rs)
-			return (-EOF);
 
 		offset += r;
 		buf += r;
@@ -214,18 +218,26 @@ srfs_fuse_read(const char *path, char *buf, size_t sz, off_t offset,
 }
 
 static int
-srfs_fuse_write(const char *path, const char *buffer, size_t size,
+srfs_fuse_write(const char *path, const char *buf, size_t sz,
 		off_t offset, struct fuse_file_info *fi)
 {
-	int res;
+	size_t size;
+	int w, ws;
 
 	srfs_fuse_setusrctx();
 
-	if (!(res = srfs_client_write((char *)path, offset, size,
-				      (char *)buffer)))
-		return (-errno);
+	for (size = sz; size > 0; size -= w) {
+		ws = MIN(srfs_maxpacketsize(), size);
+		w = srfs_client_write((char *)path, offset, ws, (char *)buf);
 
-	return (res);
+		if (w != ws)
+			return (-errno);
+
+		offset += w;
+		buf += w;
+	}
+
+	return (sz);
 }
 
 static int
@@ -332,6 +344,16 @@ srfs_fuse_readlink(const char *path, char *buf, size_t size)
 {
 	srfs_fuse_setusrctx();
 	if (!srfs_client_readlink((char *)path, buf, size))
+		return (-errno);
+
+	return (0);
+}
+
+static int
+srfs_fuse_rename(const char *src, const char *dst)
+{
+	srfs_fuse_setusrctx();
+	if (!srfs_client_rename((char *)src, (char *)dst))
 		return (-errno);
 
 	return (0);
@@ -461,6 +483,7 @@ main(int argc, char *argv[])
 	if (!srfs_sock_client_init())
 		return (1);
 
+	srfs_client_init();
 	srfs_load_hostkeys();
 
 	if (!srfs_connect(serverpath))

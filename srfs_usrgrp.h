@@ -33,6 +33,8 @@
 #include <pwd.h>
 #include <grp.h>
 
+extern void srfs_usrgrp_init(void);
+
 extern char *srfs_namebyuid(uid_t uid);
 extern uid_t srfs_uidbyname(char *usrname);
 

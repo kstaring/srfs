@@ -32,19 +32,34 @@
 
 #include "srfs_protocol.h"
 
-#define SRFS_IOBUFSZ 4096
+#define SRFS_IOBUFSZ 262144
 typedef struct srfs_iobuf {
-        char buf[SRFS_IOBUFSZ];
+        char *buf;
         char *ptr;
 	size_t size;
+	size_t bufsize;
 } srfs_iobuf_t;
 
-#define SRFS_IOBUF_INIT(x)		{ (x)->ptr = (x)->buf; (x)->size = SRFS_IOBUFSZ; }
+#define SRFS_IOBUF_RESET(x)		{ (x)->ptr = (x)->buf; (x)->size = (x)->bufsize; }
 #define SRFS_IOBUF_SIZE(x)		((x)->ptr - (x)->buf)
 #define SRFS_IOBUF_LEFT(x)		((x)->size - SRFS_IOBUF_SIZE(x))
 
 #define SRFS_IOBUF_REQUEST(x)		((srfs_request_t *)(x)->buf)
 #define SRFS_IOBUF_RESPONSE(x)		((srfs_response_t *)(x)->buf)
+
+inline srfs_iobuf_t *
+srfs_iobuf_alloc(size_t size)
+{
+	srfs_iobuf_t *res;
+
+	res = malloc(sizeof(srfs_iobuf_t));
+	res->buf = malloc(size);
+	res->bufsize = size;
+
+	SRFS_IOBUF_RESET(res);
+
+	return (res);
+}
 
 inline int
 srfs_iobuf_addptr(srfs_iobuf_t *buf, char *ptr, size_t size)

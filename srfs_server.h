@@ -32,6 +32,8 @@
 
 #include "srfs_protocol.h"
 
+extern void srfs_server_init(void);
+
 extern void srfs_request_handle(srfs_request_t *request);
 
 extern char *srfs_opcode(srfs_opcode_t opcode);
