@@ -70,6 +70,9 @@ srfs_uidbyname(char *usrname)
 	if (!(pwd = getpwnam(usrname)))
 		pwd = getpwnam("nobody");
 
+	if (pwd->pw_uid == 0)
+		pwd = getpwnam("nobody");
+
 	if (pwd)
 		return (pwd->pw_uid);
 
@@ -125,6 +128,16 @@ srfs_homebyuid(uid_t uid)
 	return (NULL);
 }
 
+int
+srfs_usrisnobody(char *usrname)
+{
+	uid_t uid;
+
+	uid = srfs_uidbyname(usrname);
+
+	return (strcmp(srfs_namebyuid(uid), "nobody") == 0);
+}
+
 void
 sfrs_set_authenticated(char *usrname)
 {
@@ -151,10 +164,7 @@ srfs_usr_authenticated(char *usrname)
 {
 	struct srfs_authuser *user;
 
-	if (!(user = LIST_FIRST(&authusers)))
-		return (0);
-
-	while ((user = LIST_NEXT(user, list)))
+	for (user = LIST_FIRST(&authusers); user; user = LIST_NEXT(user, list))
 		if (strcmp(user->usrname, usrname) == 0)
 			return (1);
 
@@ -169,9 +179,21 @@ srfs_uid_authenticated(uid_t uid)
 	if (!(user = LIST_FIRST(&authusers)))
 		return (0);
 
-	while ((user = LIST_NEXT(user, list)))
+	for (user = LIST_FIRST(&authusers); user; user = LIST_NEXT(user, list))
 		if (user->uid == uid)
 			return (1);
 
 	return (0);
+}
+
+void
+srfs_flush_auth(void)
+{
+	struct srfs_authuser *user;
+
+	while (!LIST_EMPTY(&authusers)) {
+		user = LIST_FIRST(&authusers);
+		LIST_REMOVE(user, list);
+		free(user);
+	}
 }

@@ -156,6 +156,7 @@ static int
 srfs_fuse_getattr(const char *path, struct stat *st)
 {
 	srfs_fuse_setusrctx();
+
 	return (srfs_client_stat((char *)path, st) ? 0 : -errno);
 }
 
@@ -404,7 +405,7 @@ fuse_event_handle(struct fuse_buf *connbuf, struct fuse_chan *ch)
 static int
 srfs_fuse_loop(void)
 {
-	struct pollfd pollfds[2];
+	struct pollfd pollfds[3];
 	struct fuse_chan *ch;
 	size_t cbufsize;
 	char *cbuf;
@@ -422,11 +423,20 @@ srfs_fuse_loop(void)
 
 		pollfds[0].fd = fuse_chan_fd(chan);
 		pollfds[0].events = POLLIN;
+		pollfds[1].fd = srfs_sock_fd();
+#if defined(POLLRDHUP)
+		pollfds[1].events = POLLRDHUP;
+#else
+		pollfds[1].events = POLLERR | POLLHUP;
+#endif
 
 		if ((n = poll(pollfds, 1, 1000)) > 0) {
 			if (pollfds[0].revents & POLLIN) {
 				if (!fuse_event_handle(&connbuf, ch))
 					break;
+			}
+			if (pollfds[1].revents) {
+				printf("server socket hup!\n");
 			}
 		}
 	}
@@ -457,14 +467,8 @@ srfs_connect(char *server_path)
 	server = server_path;
 	path = sep + 1;
 
-	if (!srfs_sock_connect(server))
+	if (!srfs_client_connect(server, path))
 		err(errno, "Couldn't connect to server %s", server);
-
-	if (!srfs_client_host_login())
-		printf("Couldn't login with client host key");
-
-	if (!srfs_client_mount(path))
-		err(errno, "Couldn't mount");
 
 	return (1);
 }
@@ -501,6 +505,7 @@ main(int argc, char *argv[])
 	sess = fuse_get_session(fuse);
 
 	signal(SIGINT, sigint);
+	signal(SIGPIPE, SIG_IGN);
 
 	srfs_fuse_loop();
 

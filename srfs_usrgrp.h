@@ -47,8 +47,11 @@ extern char *srfs_usrconv(char *usrname);
 extern char *srfs_homebyuid(uid_t uid);
 extern gid_t srfs_gidbyuid(uid_t uid);
 
+extern int srfs_usrisnobody(char *usrname);
+
 extern void sfrs_set_authenticated(char *usrname);
 extern int srfs_usr_authenticated(char *usrname);
 extern int srfs_uid_authenticated(uid_t uid);
+extern void srfs_flush_auth(void);
 
 #endif

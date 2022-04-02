@@ -55,4 +55,6 @@ extern int srfs_sock_fd(void);
 
 extern void srfs_sock_close(void);
 
+extern char *srfs_remote_ipstr(void);
+
 #endif

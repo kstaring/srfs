@@ -33,15 +33,15 @@
 #include <sys/types.h>
 
 #define SRFS_PORT 2050		/* Default TCP listen port for connections */
-#define SRFS_IDENT "SRFS100"	/* SRFS identification string, sent upon
+#define SRFS_IDENT "SRFS001"	/* SRFS identification string, sent upon
 				 * succesful connection by the server */
 
-#define SRFS_MAXNAMLEN 255	/* maximum length of share and filename */
-#define SRFS_MAXPATHLEN	1024	/* maximum length of a full pathname */
-#define SRFS_MAXLOGNAMELEN 33	/* maximum length of a username incl NULL */
-#define SRFS_MAXGRPNAMELEN 33	/* maximum length of a group name incl NULL */
+#define SRFS_MAXNAMLEN 255	/* Maximum length of share and filename */
+#define SRFS_MAXPATHLEN	1024	/* Maximum length of a full pathname */
+#define SRFS_MAXLOGNAMELEN 33	/* Maximum length of a username incl NULL */
+#define SRFS_MAXGRPNAMELEN 33	/* Maximum length of a group name incl NULL */
 
-#define SRFS_CHALLENGE_SZ 64	/* size of random challenge string */
+#define SRFS_CHALLENGE_SZ 64	/* Size of random challenge string */
 
 /* SRFS opcodes */
 #define SRFS_MOUNT	0	/* Mount a remote filesystem / directory */
@@ -80,19 +80,20 @@
 #define SRFS_ENOENT	1
 #define SRFS_EIO	2
 #define SRFS_EBADF	3
-#define SRFS_EACCESS	4
-#define SRFS_EXIST	5
-#define SRFS_ENOTDIR	6
-#define SRFS_EISDIR	7
-#define SRFS_EINVAL	8
-#define SRFS_EINFILE	9
-#define SRFS_ETXTBSY	10
-#define SRFS_EFBIG	11
-#define SRFS_ENOSPC	28
-#define SRFS_ESEEK	29
-#define SRFS_EROFS	30
-#define SRFS_EAGAIN	31
-#define SRFS_ENOTSUP	32
+#define SRFS_EPERM	4
+#define SRFS_EACCESS	5
+#define SRFS_EXIST	6
+#define SRFS_ENOTDIR	7
+#define SRFS_EISDIR	8
+#define SRFS_EINVAL	9
+#define SRFS_EINFILE	10
+#define SRFS_ETXTBSY	11
+#define SRFS_EFBIG	12
+#define SRFS_ENOSPC	13
+#define SRFS_ESEEK	14
+#define SRFS_EROFS	15
+#define SRFS_EAGAIN	16
+#define SRFS_ENOTSUP	17
 #define SRFS_ENAMETOOLONG 33
 #define SRFS_ENEEDAUTH	32767
 

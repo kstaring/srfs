@@ -34,11 +34,14 @@
 #include <string.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <syslog.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/endian.h>
 #include <sys/statvfs.h>
 #include <arpa/inet.h>
+
 
 #include "srfs_pki.h"
 #include "srfs_sock.h"
@@ -189,6 +192,7 @@ srfs_errno_response(srfs_iobuf_t *r)
 	case ENOENT:	status = SRFS_ENOENT; break;
 	case EIO:	status = SRFS_EIO; break;
 	case EBADF:	status = SRFS_EBADF; break;
+	case EPERM:	status = SRFS_EPERM; break;
 	case EACCES:	status = SRFS_EACCESS; break;
 	case EEXIST:	status = SRFS_EXIST; break;
 	case ENOTDIR:	status = SRFS_ENOTDIR; break;
@@ -258,12 +262,19 @@ srfs_verify_host(char *buf, size_t sz)
 
 		if (srfs_rsa_verify_path(path, sign_challenge(),
 					 SRFS_CHALLENGE_SZ, buf, sz)) {
+			syslog(LOG_AUTH | LOG_INFO, "%s: host authenticated "
+			       "with host key %s", srfs_remote_ipstr(),
+			       dire->d_name);
 			res = 1;
 			break;
 		}
 	}
 
 	closedir(dirp);
+
+	if (!res)
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: host failed authentication"
+		       "with host keys", srfs_remote_ipstr());
 
 	return (res);
 }
@@ -276,19 +287,36 @@ srfs_verify_user(char *usrname, char *buf, size_t sz)
 	char *home;
 	uid_t uid;
 
-	uid = srfs_uidbyname(usrname);
-	if (!(home = srfs_homebyuid(uid)))
+	if (srfs_usrisnobody(usrname))
 		return (0);
 
+	uid = srfs_uidbyname(usrname);
+	if (!(home = srfs_homebyuid(uid))) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication: no homedir", srfs_remote_ipstr(),
+		       usrname);
+		return (0);
+	}
+
 	if (snprintf(path, MAXPATHLEN + 1, "%s/.srfs/id_rsa.pub",
-		     home) == MAXPATHLEN)
-			return (0);
+		     home) == MAXPATHLEN) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication: path too long", srfs_remote_ipstr(),
+		       usrname);
+		return (0);
+	}
 
 	if (srfs_rsa_verify_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
 				 buf, sz)) {
 		res = 1;
 		client_authenticated = 1;
 		sfrs_set_authenticated(usrname);
+		syslog(LOG_AUTH | LOG_INFO, "%s: user %s authenticated "
+		       "with user key %s", srfs_remote_ipstr(), usrname, path);
+	} else {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication with key %s", srfs_remote_ipstr(),
+		       usrname, path);
 	}
 
 	return (res);
@@ -376,8 +404,9 @@ srfs_get_usrctx(srfs_iobuf_t *req)
 	}
 
 	if (getuid() == 0) {
-		seteuid(uid);
+		seteuid(0);
 		setegid(gid);
+		seteuid(uid);
 	}
 
 	return (1);
@@ -927,8 +956,8 @@ srfs_request_handle(srfs_request_t *req)
 //	if (getuid() == 0) {
 //		uid = srfs_uidbyname("nobody");
 //		gid = srfs_uidbyname("nogroup");
-//		seteuid(uid);
 //		setegid(gid);
+//		seteuid(uid);
 //	}
 }
 

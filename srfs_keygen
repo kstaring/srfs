@@ -6,5 +6,5 @@ if [ $# -ne 1 ]; then
   exit 1
 fi
 
-openssl genrsa -out "$1" 4096
+openssl genrsa -out "$1".key 4096
 openssl rsa -in "$1" -outform PEM -pubout -out "$1".pub

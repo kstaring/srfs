@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <signal.h>
+#include <syslog.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/wait.h>
@@ -57,6 +58,8 @@ static SSL_CTX *ctx = NULL;
 static SSL *ssl = NULL;
 
 static char challenge[SRFS_CHALLENGE_SZ];
+
+static char remote_peer[INET6_ADDRSTRLEN];
 
 static int srfs_sock_generic_init(const SSL_METHOD *method);
 
@@ -134,12 +137,15 @@ srfs_accept_client(void)
 	socklen_t len;
 	int fd, rd, r;
 
+	len = sizeof(struct sockaddr_storage);
 	if ((fd = accept(sock_fd, (struct sockaddr *)&a, &len)) == -1) {
 		perror("accept() failed");
 		exit(1);
 	}
 	close(sock_fd);
 	sock_fd = fd;
+
+	strcpy(remote_peer, peername(&a));
 
 	ssl = SSL_new(ctx);
 	SSL_set_fd(ssl, sock_fd);
@@ -164,6 +170,8 @@ srfs_accept_client(void)
 	close(fd);
 
 	srfs_sock_write_sync(challenge, SRFS_CHALLENGE_SZ);
+
+	syslog(LOG_DAEMON | LOG_INFO, "%s: connected", srfs_remote_ipstr());
 }
 
 static int
@@ -218,6 +226,9 @@ srfs_sock_read_sync(char *buf, size_t size)
 {
 	ssize_t res, r;
 
+	if (!ssl)
+		return (-1);
+
 	for (res = 0; res < size; res += r) {
 		r = SSL_read(ssl, buf, size);
 		if (r <= 0 && r != EINTR)
@@ -233,6 +244,9 @@ ssize_t
 srfs_sock_write_sync(char *buf, size_t size)
 {
 	ssize_t res, w;
+
+	if (!ssl)
+		return (-1);
 
 	for (res = 0; res < size; res += w) {
 		w = SSL_write(ssl, buf, size);
@@ -275,6 +289,8 @@ int
 srfs_sock_connect(char *server)
 {
 	struct addrinfo hints, *res, *i;
+	struct sockaddr_storage sa;
+	socklen_t len;
 	char port[6];
 	char buf[9];
 	int fd;
@@ -296,7 +312,13 @@ srfs_sock_connect(char *server)
 			close(fd);
 			continue;
 		}
-		
+
+		len = sizeof(struct sockaddr_storage);
+		bzero(&sa, len);
+		if (getpeername(fd, (struct sockaddr *)&sa, &len) == 0)
+			strcpy(remote_peer, peername(&sa));
+		else
+			strcpy(remote_peer, "unknown");
 		break;
 	}
 	freeaddrinfo(res);
@@ -324,4 +346,10 @@ srfs_sock_connect(char *server)
 	srfs_sock_read_sync(challenge, SRFS_CHALLENGE_SZ);
 
 	return (1);
+}
+
+char *
+srfs_remote_ipstr(void)
+{
+	return (remote_peer);
 }

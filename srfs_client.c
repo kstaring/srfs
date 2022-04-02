@@ -30,13 +30,14 @@
 #include <err.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <sys/endian.h>
+#include <syslog.h>
 #include <string.h>
 #include <strings.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/socket.h>
+#include <sys/endian.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/crypto.h>
@@ -75,6 +76,11 @@ static int srfs_execute_rpc(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
 static srfs_iobuf_t *req = NULL;
 static srfs_iobuf_t *resp = NULL;
+
+static char server_host[MAXHOSTNAMELEN + 1];
+static char server_path[MAXPATHLEN + 1];
+
+static int reconnect_delay = 0;
 
 void
 srfs_client_init(void)
@@ -141,15 +147,69 @@ srfs_request_finalize(srfs_iobuf_t *req)
 	req->size = SRFS_IOBUF_SIZE(req);
 }
 
+int
+srfs_client_connect(char *server, char *path)
+{
+	if (strlen(server) > MAXHOSTNAMELEN) {
+		errno = EINVAL;
+		return (0);
+	}
+	if (strlen(path) > MAXPATHLEN) {
+		errno = ENAMETOOLONG;
+		return (0);
+	}
+
+	if (server_host != server)
+		strcpy(server_host, server);
+	if (server_path != path)
+		strcpy(server_path, path);
+
+	if (!srfs_sock_connect(server))
+		return (0);
+
+	if (!srfs_client_host_login()) {
+		errno = EACCES;
+		printf("Couldn't login to %s with client host key",
+		       server_host);
+		return (0);
+	}
+
+	if (!srfs_client_mount(path)) {
+		printf("Couldn't mount %s:%s", server_host, server_path);
+		return (0);
+	}
+
+	reconnect_delay = 0;
+
+	return (1);
+}
+
+static void
+srfs_reconnect(void)
+{
+	srfs_flush_auth();
+
+	if (!reconnect_delay)
+		syslog(LOG_DAEMON | LOG_INFO, "%s:%s connection lost",
+		       server_host, server_path);
+
+	sleep(reconnect_delay);
+
+	if (srfs_client_connect(server_host, server_path)) {
+		syslog(LOG_DAEMON | LOG_INFO, "%s:%s reconnected",
+		       server_host, server_path);
+	} else {
+		syslog(LOG_DAEMON | LOG_INFO, "%s:%s reconnect failed",
+		       server_host, server_path);
+		if (reconnect_delay < 20)
+			reconnect_delay++;
+	}
+}
+
 static int
 srfs_request_send(srfs_iobuf_t *req)
 {
-	srfs_request_finalize(req);
-
-	if (!srfs_sock_write_sync(req->buf, SRFS_IOBUF_SIZE(req)))
-		return (0);
-
-	return (1);
+	return (srfs_sock_write_sync(req->buf, SRFS_IOBUF_SIZE(req)));
 }
 
 static void
@@ -159,6 +219,7 @@ srfs_client_set_errno(srfs_errno_t err)
 	case SRFS_ENOENT:	errno = ENOENT; break;
 	case SRFS_EIO:		errno = EIO; break;
 	case SRFS_EBADF:	errno = EBADF; break;
+	case SRFS_EPERM:	errno = EPERM; break;
 	case SRFS_EACCESS:	errno = EACCES; break;
 	case SRFS_EXIST:	errno = EEXIST; break;
 	case SRFS_ENOTDIR:	errno = ENOTDIR; break;
@@ -253,8 +314,8 @@ srfs_client_read_response(srfs_iobuf_t *resp)
 	srfs_response_t *r;
 
 	SRFS_IOBUF_RESET(resp);
-	if (!srfs_sock_read_sync(resp->buf, sizeof(srfs_response_t)))
-		return (0);
+	if (srfs_sock_read_sync(resp->buf, sizeof(srfs_response_t)) == -1)
+		return (-1);
 
 	r = SRFS_IOBUF_RESPONSE(resp);
 	r->r_errno = ntohs(r->r_errno);
@@ -283,13 +344,24 @@ srfs_client_read_response(srfs_iobuf_t *resp)
 static int
 srfs_execute_rpc(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-	if (!srfs_request_send(req))
-		return (0);
+	int res;
 
-	if (!srfs_client_read_response(resp))
-		return (0);
+	srfs_request_finalize(req);
 
-	return (1);
+	for (;;) {
+		while ((res = srfs_request_send(req)) == -1)
+			srfs_reconnect();
+
+		if (!res)
+			return (0);
+
+		if ((res = srfs_client_read_response(resp)) != -1)
+			break;
+
+		srfs_reconnect();
+	}
+
+	return (res);
 }
 
 int
@@ -495,6 +567,9 @@ srfs_client_readdir(srfs_dirlist_t *dirlist)
 	srfs_dirent_t *res;
 	off_t offset;
 
+	if (!dirlist)
+		return (NULL);
+
 	if (dirlist->count == dirlist->idx) {
 		offset = dirlist->offset + dirlist->count;
 		if (!srfs_client_dirlist_fill(dirlist, offset))
@@ -515,6 +590,9 @@ srfs_client_readdir(srfs_dirlist_t *dirlist)
 void
 srfs_client_closedir(srfs_dirlist_t *dirlist)
 {
+	if (!dirlist)
+		return;
+
 	free(dirlist->listbuf);
 	free(dirlist);
 }
