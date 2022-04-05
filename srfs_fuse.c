@@ -78,6 +78,7 @@ static int srfs_fuse_link(const char *to, const char *from);
 static int srfs_fuse_symlink(const char *to, const char *from);
 static int srfs_fuse_readlink(const char *path, char *buf, size_t size);
 static int srfs_fuse_rename(const char *src, const char *dst);
+static int srfs_fuse_utimens(const char *path, const struct timespec tv[2]);
 
 /*static const struct fuse_opt opts[] = {
 	FUSE_OPT_END
@@ -102,7 +103,8 @@ static struct fuse_operations fops = {
 	.link = srfs_fuse_link,
 	.symlink = srfs_fuse_symlink,
 	.readlink = srfs_fuse_readlink,
-	.rename = srfs_fuse_rename
+	.rename = srfs_fuse_rename,
+	.utimens = srfs_fuse_utimens
 };
 
 static struct fuse *fuse = NULL;
@@ -361,6 +363,14 @@ srfs_fuse_rename(const char *src, const char *dst)
 }
 
 static int
+srfs_fuse_utimens(const char *path, const struct timespec tv[2])
+{
+	srfs_fuse_setusrctx();
+
+	return (0);
+}
+
+static int
 srfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
 	switch (key) {
@@ -476,8 +486,25 @@ srfs_connect(char *server_path)
 int
 main(int argc, char *argv[])
 {
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	int mountmode = 0;
+	char **nargv;
+	int nargc;
 
+	nargc = argc;
+	nargv = argv;
+
+	// TODO a bit sloppy
+	if (strstr(argv[0], "mount_srfs") || strstr(argv[0], "mount.srfs")) {
+		nargc += 2;
+		nargv = malloc(sizeof(char *) * (argc + 3));
+		bcopy(argv, nargv, sizeof(char *) * argc);
+		nargv[argc] = "-o";
+		nargv[argc + 1] = "allow_other";
+		nargv[argc + 2] = NULL;
+		mountmode = 1;
+	}
+
+	struct fuse_args args = FUSE_ARGS_INIT(nargc, nargv);
 	if (fuse_opt_parse(&args, NULL, NULL, srfs_opt_proc) == -1)
 		return (1);
 
@@ -506,6 +533,9 @@ main(int argc, char *argv[])
 
 	signal(SIGINT, sigint);
 	signal(SIGPIPE, SIG_IGN);
+
+	if (mountmode)
+		daemon(0, 0);
 
 	srfs_fuse_loop();
 

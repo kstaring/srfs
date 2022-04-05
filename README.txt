@@ -8,14 +8,14 @@ clever way, so it is decided thusly to be pronounced `SERVES'.
 SRFS features include the following:
 
 - All network communication is encrypted by default, all communication is
-  handled by one TCP connection on one port: a SRFS client can always be
+  handled by one TCP connection on one port: a SRFS client mount can always be
   associated by one TCP connection.
 - Users must authenticate with the SRFS server before being able to access
-  their files on its exported filesystems.
+  files on its exported filesystems.
   - srfs can leverage SSH infrastructure to transparently authenticate with
-    authorized_keys.
+    authorized_keys. (This is not yet implemented.)
   - srfs_auth to authenticate with a username and password, which might
-    be integrated in PAM or similar system.
+    be integrated in PAM or similar system. (Also yet to be implemented.)
 - User- and group IDs are transparently rewritten; users and groups not
   present on the client are presented as 'nobody' and 'nogroup'. In other
   words: there is no need for uids and gids to be equal on the client and

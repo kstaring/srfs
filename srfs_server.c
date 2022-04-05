@@ -38,6 +38,7 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/queue.h>
 #include <sys/endian.h>
 #include <sys/statvfs.h>
 #include <arpa/inet.h>
@@ -54,8 +55,27 @@
 
 #define RESPONSE_SIZE(x) sizeof(srfs_response_t) + x
 
-typedef int (*srfs_server_func_t)(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+typedef struct srfs_file_cache {
+	char *path;
+	int mode;
+	int fd;
+	off_t offset;
+	time_t timestamp;
+	LIST_ENTRY(srfs_file_cache) list;
+} srfs_file_t;
+LIST_HEAD(file_cache, srfs_file_cache);
+static struct file_cache file_cache = LIST_HEAD_INITIALIZER(file_cache);
 
+typedef struct srfs_dir_cache {
+	char *path;
+	DIR *d;
+	time_t timestamp;
+	LIST_ENTRY(srfs_dir_cache) list;
+} srfs_dir_t;
+LIST_HEAD(dir_cache, srfs_dir_cache);
+static struct dir_cache dir_cache = LIST_HEAD_INITIALIZER(dir_cache);
+
+typedef int (*srfs_server_func_t)(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static char *srfs_opcodes[] = {
 	"SRFS_MOUNT",
 	"SRFS_STATVFS",
@@ -139,7 +159,29 @@ srfs_server_init(void)
 	reqbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
 	respbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
 
+	LIST_INIT(&file_cache);
+	LIST_INIT(&dir_cache);
+
 	srfs_usrgrp_init();
+}
+
+void
+srfs_server_periodic_cleanup(void)
+{
+	srfs_file_t *file, *tfile;
+	srfs_dir_t *dir, *tdir;
+	time_t tm;
+
+	tm = time(NULL) - 10;
+
+	LIST_FOREACH_SAFE(file, &file_cache, list, tfile) {
+		if (file->timestamp < tm)
+			LIST_REMOVE(file, list);
+	}
+	LIST_FOREACH_SAFE(dir, &dir_cache, list, tdir) {
+		if (dir->timestamp < tm)
+			LIST_REMOVE(dir, list);
+	}
 }
 
 static int
@@ -570,6 +612,42 @@ srfs_stat(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	return (1);
 }
 
+static srfs_dir_t *
+srfs_dir_open(char *path)
+{
+	srfs_dir_t *res;
+	DIR *dirp;
+
+	LIST_FOREACH(res, &dir_cache, list) {
+		if (strcmp(res->path, path) == 0) {
+			res->timestamp = time(NULL);
+			return (res);
+		}
+	}
+
+	if (!(dirp = opendir(path)))
+		return (NULL);
+
+	res = malloc(sizeof(srfs_dir_t));
+	res->path = strdup(path);
+	res->d = dirp;
+	res->timestamp = time(NULL);
+
+	LIST_INSERT_HEAD(&dir_cache, res, list);
+
+	return (res);
+}
+
+static void
+srfs_dir_close(srfs_dir_t *dir)
+{
+	LIST_REMOVE(dir, list);
+
+	closedir(dir->d);
+	free(dir->path);
+	free(dir);
+}
+
 static int
 srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
@@ -578,8 +656,8 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	srfs_bufsz_t replsize;
 	struct dirent *dire;
 	srfs_dirent_t rde;
+	srfs_dir_t *dir;
 	size_t len;
-	DIR *dirp;
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
@@ -591,18 +669,18 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	replsize = srfs_iobuf_get32(req);
 	replsize = MIN(SRFS_IOBUF_LEFT(resp), replsize);
 
-	if (!(dirp = opendir(path)))
+	if (!(dir = srfs_dir_open(path)))
 		return (srfs_errno_response(resp));
+
+	rewinddir(dir->d);
 
 	resp->size = sizeof(srfs_response_t) + replsize;
 
-	for (idx = 0; (dire = readdir(dirp)); idx++) {
+	for (idx = 0; (dire = readdir(dir->d)); idx++) {
 		if (idx < offset)
 			continue;
 
-		len = strlen(dire->d_name);
-		if (len > SRFS_MAXNAMLEN)
-			continue; /* TODO: probably not the best action */
+		len = MIN(SRFS_MAXNAMLEN, strlen(dire->d_name));
 
 		rde.d_type = dire->d_type;
 		bcopy(dire->d_name, rde.d_name, len + 1);
@@ -610,7 +688,8 @@ srfs_readdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 			break;
 	}
 
-	closedir(dirp);
+	if (!dire)
+		srfs_dir_close(dir);
 
 	return (1);
 }
@@ -637,14 +716,52 @@ srfs_create(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	return (1);
 }
 
+static srfs_file_t *
+srfs_file_open(char *path, int mode)
+{
+	srfs_file_t *res;
+	int fd;
+
+	LIST_FOREACH(res, &file_cache, list) {
+		if (strcmp(res->path, path) == 0 && res->mode == mode) {
+			res->timestamp = time(NULL);
+			return (res);
+		}
+	}
+
+	if (!(fd = open(path, mode)))
+		return (NULL);
+
+	res = malloc(sizeof(srfs_file_t));
+	res->path = strdup(path);
+	res->mode = mode;
+	res->fd = fd;
+	res->offset = 0;
+	res->timestamp = time(NULL);
+
+	LIST_INSERT_HEAD(&file_cache, res, list);
+
+	return (res);
+}
+
+static void
+srfs_file_close(srfs_file_t *file)
+{
+	LIST_REMOVE(file, list);
+
+	close(file->fd);
+	free(file->path);
+	free(file);
+}
+
 static int
 srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	srfs_off_t offset;
+	srfs_file_t *file;
 	ssize_t len;
 	size_t size;
-	FILE *f;
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
@@ -653,23 +770,24 @@ srfs_read(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	size = srfs_iobuf_get64(req);
 	size = MIN(size, SRFS_IOBUF_LEFT(resp));
 
-	if (!(f = fopen(path, "re")))
+	if (!(file = srfs_file_open(path, O_RDONLY)))
 		return (srfs_errno_response(resp));
 
-	if (offset) {
-		if (fseek(f, offset, SEEK_SET) == -1) {
-			fclose(f);
+	if (offset != file->offset) {
+		if (lseek(file->fd, offset, SEEK_SET) == -1) {
+			srfs_file_close(file);
 			return (srfs_errno_response(resp));
 		}
 	}
 
-	if ((len = fread(resp->ptr, 1, size, f)) == -1) {
-		fclose(f);
+	if ((len = read(file->fd, resp->ptr, size)) == -1) {
+		srfs_file_close(file);
 		return (srfs_errno_response(resp));
 	}
-	fclose(f);
 
 	resp->ptr += len;
+
+	file->offset = offset + len;
 
 	return (1);
 }
@@ -678,39 +796,38 @@ static int
 srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
+	size_t size, wsize;
 	srfs_off_t offset;
-	size_t size;
-	char *ostr;
-	FILE *f;
+	srfs_file_t *file;
 	int w;
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
 	offset = srfs_iobuf_get64(req);
-	size = SRFS_IOBUF_LEFT(req);
+	size = wsize = SRFS_IOBUF_LEFT(req);
 
-	ostr = offset ? "ae" : "we";
-	if (!(f = fopen(path, ostr)))
+	if (!(file = srfs_file_open(path, O_WRONLY)))
 		return (srfs_errno_response(resp));
 
-	if (offset && offset != ftello(f)) {
-		if (fseek(f, offset, SEEK_SET) == -1) {
-			fclose(f);
+	if (offset != file->offset) {
+		if (lseek(file->fd, offset, SEEK_SET) == -1) {
+			srfs_file_close(file);
 			return (srfs_errno_response(resp));
 		}
 	}
 	for (; size != 0;) {
-		if ((w = fwrite(req->ptr, 1, size, f)) == -1) {
+		if ((w = write(file->fd, req->ptr, size)) == -1) {
 			if (errno == EINTR)
 				continue;
-			fclose(f);
+			srfs_file_close(file);
 			return (srfs_errno_response(resp));
 		}
 		size -= w;
 		req->ptr += w;
 	}
-	fclose(f);
+
+	file->offset = offset + wsize;
 
 	return (1);
 }

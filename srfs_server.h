@@ -38,4 +38,6 @@ extern void srfs_request_handle(srfs_request_t *request);
 
 extern char *srfs_opcode(srfs_opcode_t opcode);
 
+extern void srfs_server_periodic_cleanup(void);
+
 #endif

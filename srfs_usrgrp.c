@@ -35,97 +35,201 @@
 #include "srfs_usrgrp.h"
 #include "srfs_protocol.h"
 
+struct srfs_pwdcache {
+	char *name;
+	char *dir;
+	uid_t uid;
+	gid_t gid;
+	LIST_ENTRY(srfs_pwdcache) list;
+};
+
+struct srfs_grpcache {
+	char *name;
+	gid_t gid;
+	LIST_ENTRY(srfs_grpcache) list;
+};
+
 struct srfs_authuser {
 	char usrname[SRFS_MAXLOGNAMELEN];
 	uid_t uid;
 	gid_t gid;
 	LIST_ENTRY(srfs_authuser) list;
 };
+
+LIST_HEAD(pwdcache, srfs_pwdcache);
+static struct pwdcache pwdcache = LIST_HEAD_INITIALIZER(pwdcache);
+LIST_HEAD(grpcache, srfs_grpcache);
+static struct grpcache grpcache = LIST_HEAD_INITIALIZER(grpcache);
 LIST_HEAD(authusers, srfs_authuser);
-struct authusers authusers = LIST_HEAD_INITIALIZER(authusers);
+static struct authusers authusers = LIST_HEAD_INITIALIZER(authusers);
+
+static struct srfs_pwdcache *
+pwdcache_by_name(char *name)
+{
+	struct srfs_pwdcache *cache;
+	struct passwd *pwd;
+
+	LIST_FOREACH(cache, &pwdcache, list)
+		if (strcmp(cache->name, name) == 0)
+			return (cache);
+
+	if (!(pwd = getpwnam(name)))
+		return (NULL);
+
+	cache = malloc(sizeof(struct srfs_pwdcache));
+	cache->name = strdup(pwd->pw_name);
+	cache->dir = strdup(pwd->pw_dir);
+	cache->uid = pwd->pw_uid;
+	cache->gid = pwd->pw_gid;
+	LIST_INSERT_HEAD(&pwdcache, cache, list);
+
+	return (cache);
+}
+
+static struct srfs_pwdcache *
+pwdcache_by_uid(uid_t uid)
+{
+	struct srfs_pwdcache *cache;
+	struct passwd *pwd;
+
+	LIST_FOREACH(cache, &pwdcache, list)
+		if (cache->uid == uid)
+			return (cache);
+
+	if (!(pwd = getpwuid(uid)))
+		return (NULL);
+
+	cache = malloc(sizeof(struct srfs_pwdcache));
+	cache->name = strdup(pwd->pw_name);
+	cache->dir = strdup(pwd->pw_dir);
+	cache->uid = pwd->pw_uid;
+	cache->gid = pwd->pw_gid;
+	LIST_INSERT_HEAD(&pwdcache, cache, list);
+
+	return (cache);
+}
+
+static struct srfs_grpcache *
+grpcache_by_name(char *name)
+{
+	struct srfs_grpcache *cache;
+	struct group *grp;
+
+	LIST_FOREACH(cache, &grpcache, list)
+		if (strcmp(cache->name, name) == 0)
+			return (cache);
+
+	if (!(grp = getgrnam(name)))
+		return (NULL);
+
+	cache = malloc(sizeof(struct srfs_grpcache));
+	cache->name = strdup(grp->gr_name);
+	cache->gid = grp->gr_gid;
+	LIST_INSERT_HEAD(&grpcache, cache, list);
+
+	return (cache);
+}
+
+static struct srfs_grpcache *
+grpcache_by_gid(gid_t gid)
+{
+	struct srfs_grpcache *cache;
+	struct group *grp;
+
+	LIST_FOREACH(cache, &grpcache, list)
+		if (cache->gid == gid)
+			return (cache);
+
+	if (!(grp = getgrgid(gid)))
+		return (NULL);
+
+	cache = malloc(sizeof(struct srfs_grpcache));
+	cache->name = strdup(grp->gr_name);
+	cache->gid = grp->gr_gid;
+	LIST_INSERT_HEAD(&grpcache, cache, list);
+
+	return (cache);
+}
 
 void
 srfs_usrgrp_init(void)
 {
+	LIST_INIT(&pwdcache);
+	LIST_INIT(&grpcache);
 	LIST_INIT(&authusers);
+
+	if (!(pwdcache_by_name("nobody"))) {
+		printf("user nobody not found!\n");
+		exit(1);
+	}
+	if (!(grpcache_by_name("nogroup"))) {
+		printf("gropu nogroup not found!\n");
+		exit(1);
+	}
 }
 
 char *
 srfs_namebyuid(uid_t uid)
 {
-	struct passwd *pwd;
+	struct srfs_pwdcache *cache;
 
-	if ((pwd = getpwuid(uid)))
-		if (strlen(pwd->pw_name) < SRFS_MAXLOGNAMELEN)
-			return (pwd->pw_name);
+	if (!(cache = pwdcache_by_uid(uid)))
+		return ("nobody");
 
-	return ("nobody");
+	return (cache->name);
 }
 
 uid_t
 srfs_uidbyname(char *usrname)
 {
-	struct passwd *pwd;
+	struct srfs_pwdcache *cache;
 
-	if (!(pwd = getpwnam(usrname)))
-		pwd = getpwnam("nobody");
+	if (!(cache = pwdcache_by_name(usrname)))
+		cache = pwdcache_by_name("nobody");
 
-	if (pwd->pw_uid == 0)
-		pwd = getpwnam("nobody");
-
-	if (pwd)
-		return (pwd->pw_uid);
-
-	return (65534);
+	return (cache->uid);
 }
 
 gid_t
 srfs_gidbyuid(uid_t uid)
 {
-	struct passwd *pwd;
+	struct srfs_pwdcache *cache;
 
-	if (!(pwd = getpwuid(uid)))
-		pwd = getpwnam("nobody");
+	if (!(cache = pwdcache_by_uid(uid)))
+		cache = pwdcache_by_name("nobody");
 
-	if (pwd)
-		return (pwd->pw_gid);
-
-	return (65534);
+	return (cache->gid);
 }
 
 char *srfs_namebygid(gid_t gid)
 {
-	struct group *grp;
+	struct srfs_grpcache *cache;
 
-	if ((grp = getgrgid(gid)))
-		if (strlen(grp->gr_name) < SRFS_MAXGRPNAMELEN)
-			return (grp->gr_name);
+	if (!(cache = grpcache_by_gid(gid)))
+		cache = grpcache_by_name("nogroup");
 
-	return ("nogroup");
+	return (cache->name);
 }
 
 uid_t srfs_gidbyname(char *grpname)
 {
-	struct group *grp;
+	struct srfs_grpcache *cache;
 
-	if (!(grp = getgrnam(grpname)))
-		grp = getgrnam("nogroup");
+	if (!(cache = grpcache_by_name(grpname)))
+		cache = grpcache_by_name("nogroup");
 
-	if (grp)
-		return (grp->gr_gid);
-
-	return (65533);
+	return (cache->gid);
 }
 
 char *
 srfs_homebyuid(uid_t uid)
 {
-	struct passwd *pwd;
+	struct srfs_pwdcache *cache;
 
-	if ((pwd = getpwuid(uid)))
-		return (pwd->pw_dir);
+	if (!(cache = pwdcache_by_uid(uid)))
+		cache = pwdcache_by_name("nobody");
 
-	return (NULL);
+	return (cache->dir);
 }
 
 int
@@ -164,7 +268,7 @@ srfs_usr_authenticated(char *usrname)
 {
 	struct srfs_authuser *user;
 
-	for (user = LIST_FIRST(&authusers); user; user = LIST_NEXT(user, list))
+	LIST_FOREACH(user, &authusers, list)
 		if (strcmp(user->usrname, usrname) == 0)
 			return (1);
 
@@ -176,10 +280,7 @@ srfs_uid_authenticated(uid_t uid)
 {
 	struct srfs_authuser *user;
 
-	if (!(user = LIST_FIRST(&authusers)))
-		return (0);
-
-	for (user = LIST_FIRST(&authusers); user; user = LIST_NEXT(user, list))
+	LIST_FOREACH(user, &authusers, list)
 		if (user->uid == uid)
 			return (1);
 

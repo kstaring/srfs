@@ -107,13 +107,14 @@ static void
 server_accept_loop(void)
 {
 	struct pollfd pollfds[2];
+	time_t tm;
 	int n;
 
 	for (;;) {
 		pollfds[0].fd = srfs_sock_fd();
 		pollfds[0].events = POLLIN;
 
-		if ((n = poll(pollfds, 1, 1000)) > 0) {
+		if ((n = poll(pollfds, 1, 10000)) > 0) {
 			if (main_daemon) {
 				server_accept();
 				waitpid(-1, NULL, WNOHANG);
@@ -121,6 +122,9 @@ server_accept_loop(void)
 				client_handle(pollfds[0].revents);
 			}
 		}
+		tm = time(NULL);
+		if (tm % 10 == 0)
+			srfs_server_periodic_cleanup();
 	}
 }
 

@@ -351,5 +351,8 @@ srfs_sock_connect(char *server)
 char *
 srfs_remote_ipstr(void)
 {
+	if (strncmp(remote_peer, "::ffff:", 7) == 0)
+		return (remote_peer + 7);
+
 	return (remote_peer);
 }
