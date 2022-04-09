@@ -13,7 +13,7 @@ all: fuse-client server authenticator
 
 fuse-client:
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $(FCLIENT) `pkg-config fuse --cflags --libs` $(FCSRCS)
-	@cp srfs mount_srfs
+	@cp -f srfs mount_srfs
 
 server:
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $(SERVER) $(SSRCS)

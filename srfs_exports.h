@@ -30,9 +30,13 @@
 #ifndef _SRFS_EXPORTS_H
 #define _SRFS_EXPORTS_H
 
+#define SRFS_EXPORT_FLAG_RO 0
+#define SRFS_EXPORT_FLAG_RW 1
+
 typedef struct srfs_export {
 	char *share;
 	char *localdir;
+	int flags;
 } srfs_export_t;
 
 extern srfs_export_t **exports;

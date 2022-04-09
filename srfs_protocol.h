@@ -30,6 +30,7 @@
 #ifndef _SRFS_PROTOCOL_H
 #define _SRFS_PROTOCOL_H
 
+#include <stdint.h>
 #include <sys/types.h>
 
 #define SRFS_PORT 2050		/* Default TCP listen port for connections */
@@ -73,7 +74,9 @@
 
 #define SRFS_RENAME	17	/* Remove a file */
 
-#define SRFS_OPCODE_MAX	18	/* Defines the number of opcodes */
+#define SRFS_UTIMENS	18	/* Remove a file */
+
+#define SRFS_OPCODE_MAX	19	/* Defines the number of opcodes */
 
 /* SRFS status  codes */
 #define SRFS_OK		0

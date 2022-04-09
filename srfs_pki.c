@@ -29,6 +29,8 @@
 
 #include <err.h>
 #include <errno.h>
+#include <string.h>
+#include <sys/endian.h>
 #include <openssl/ssl.h>
 #include <openssl/evp.h>
 
@@ -67,13 +69,113 @@ srfs_load_pubkey(char *path)
 }
 
 int
+srfs_b64_decode(char *decoded, char *ptr, size_t b64size)
+{
+	BIO *b64_bio, *mem_bio;
+	int res;
+
+	b64_bio = BIO_new(BIO_f_base64());
+	mem_bio = BIO_new(BIO_s_mem());
+	BIO_write(mem_bio, ptr, b64size);
+	BIO_push(b64_bio, mem_bio);
+	BIO_set_flags(b64_bio, BIO_FLAGS_BASE64_NO_NL);
+	for (res = 0; BIO_read(b64_bio, decoded + res, 1) > 0 && res < b64size; res++) { }
+	BIO_free_all(b64_bio);
+
+	return (res);
+}
+
+static RSA *
+srfs_load_pubkey_ssh(char *data, size_t size)
+{
+	char *hdrptr, *expptr, *modptr;
+	uint32_t hdrsz, expsz, modsz;
+	BIGNUM *expbn, *modbn;
+	uint32_t *ptr;
+	RSA *res;
+
+	if (size < 4)
+		return (NULL);
+
+	ptr = (uint32_t *)data;
+	hdrsz = be32toh(*ptr);
+	hdrptr = data + sizeof(uint32_t);
+
+	ptr = (uint32_t *)(hdrptr + hdrsz);
+	if (size < (char *)ptr - data)
+		return (NULL);
+
+	expsz = be32toh(*ptr);
+	expptr = (char *)ptr + sizeof(uint32_t);
+
+	ptr = (uint32_t *)(expptr + expsz);
+	if (size < (char *)ptr - data)
+		return (NULL);
+
+	modsz = be32toh(*ptr);
+	modptr = (char *)ptr + sizeof(uint32_t);
+
+	ptr = (uint32_t *)(modptr + modsz);
+	if (size < (char *)ptr - data)
+		return (NULL);
+
+	if (strncmp(hdrptr, "ssh-rsa", 7) != 0)
+		return (NULL);
+
+	res = RSA_new();
+	expbn = BN_new();
+	modbn = BN_new();
+
+	if (!BN_bin2bn((const unsigned char *)expptr, expsz, expbn))
+		goto srfs_load_pubkey_ssh_fail;
+	if (!BN_bin2bn((const unsigned char *)modptr, modsz, modbn))
+		goto srfs_load_pubkey_ssh_fail;
+	if (!RSA_set0_key(res, modbn, expbn, NULL))
+		goto srfs_load_pubkey_ssh_fail;
+
+	return (res);
+
+srfs_load_pubkey_ssh_fail:
+	BN_free(modbn);
+	BN_free(expbn);
+	RSA_free(res);
+	return (NULL);
+}
+
+static RSA *
+srfs_ssh_read_pubkey(FILE *f)
+{
+	char decoded[2048];
+	char buf[2048];
+	size_t b64size;
+	char *endptr;
+	char *ptr;
+
+	if (!fgets(buf, 2047, f))
+		return (NULL);
+
+	if (strncmp(buf, "ssh-rsa ", 8) != 0)
+		return (NULL);
+
+	buf[2047] = '\0';
+	ptr = buf + 8;
+	if (!(endptr = index(ptr, ' '))) // malformed line
+		return (NULL);
+
+	b64size = endptr - ptr;
+	srfs_b64_decode(decoded, ptr, b64size);
+
+	return (srfs_load_pubkey_ssh(decoded, b64size));
+}
+
+int
 srfs_load_hostkeys(void)
 {
-	if (!(host_privkey = srfs_load_privkey(SRFS_HOST_PRIVKEY)))
-		printf("Couldn't load %s\n", SRFS_HOST_PRIVKEY);
+	if (!(host_privkey = srfs_load_privkey(SRFS_CLIENT_PRIVKEY)))
+		printf("Couldn't load %s\n", SRFS_CLIENT_PRIVKEY);
 
-	if (!(host_pubkey = srfs_load_pubkey(SRFS_HOST_PUBKEY)))
-		printf("Couldn't load %s\n", SRFS_HOST_PUBKEY);
+	if (!(host_pubkey = srfs_load_pubkey(SRFS_CLIENT_PUBKEY)))
+		printf("Couldn't load %s\n", SRFS_CLIENT_PUBKEY);
 
 	return (1);
 }
@@ -171,14 +273,47 @@ srfs_rsa_verify_path(char *path, char *msg, size_t msgsize,
 		     char *sign, size_t signsize)
 {
 	RSA *pub;
-	int res;
+	FILE *f;
 
-	if (!(pub = srfs_load_pubkey(path)))
+	if (!(f = fopen(path, "r")))
 		return (0);
 
-	res = srfs_rsa_verify(pub, msg, msgsize, sign, signsize);
+	for (; !feof(f);) {
+		if ((pub = PEM_read_RSA_PUBKEY(f, NULL, NULL, NULL))) {
+			if (srfs_rsa_verify(pub, msg, msgsize, sign, signsize)){
+				RSA_free(pub);
+				fclose(f);
+				return (1);
+			}
+		}
+		RSA_free(pub);
+	}
+	fclose(f);
 
-	RSA_free(pub);
+	return (0);
+}
 
-	return (res);
+int
+srfs_ssh_verify_path(char *path, char *msg, size_t msgsize,
+		     char *sign, size_t signsize)
+{
+	RSA *pub;
+	FILE *f;
+
+	if (!(f = fopen(path, "r")))
+		return (0);
+
+	for(; !feof(f);) {
+		if (!(pub = srfs_ssh_read_pubkey(f)))
+			continue;
+
+		if (srfs_rsa_verify(pub, msg, msgsize, sign, signsize)) {
+			RSA_free(pub);
+			fclose(f);
+			return (1);
+		}
+	}
+	fclose(f);
+
+	return (0);
 }

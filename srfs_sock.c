@@ -207,14 +207,14 @@ srfs_sock_server_init(void)
 	if (!srfs_sock_generic_init(TLS_server_method()))
 		return (0);
 
-	if (SSL_CTX_use_certificate_file(ctx, SRFS_HOST_CERT,
+	if (SSL_CTX_use_certificate_file(ctx, SRFS_SERVER_CERT,
 					 SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_HOST_CERT);
+		printf("Couldn't read %s\n", SRFS_SERVER_CERT);
 		return (0);
 	}
-	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_HOST_PRIVKEY,
+	if (SSL_CTX_use_PrivateKey_file(ctx, SRFS_SERVER_PRIVKEY,
 					SSL_FILETYPE_PEM) != 1) {
-		printf("Couldn't read %s\n", SRFS_HOST_PRIVKEY);
+		printf("Couldn't read %s\n", SRFS_SERVER_PRIVKEY);
 		return (0);
 	}
 

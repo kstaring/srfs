@@ -262,26 +262,26 @@ srfs_set_usrctx(uid_t uid, gid_t gid)
 	strcpy(usrctx.grpname, grp);
 }
 
-int
-srfs_client_user_login(void)
+static int
+srfs_client_user_login_path(char *path, uint8_t auth_type)
 {
-	char ppath[MAXPATHLEN + 1];
-	size_t len;
+	struct stat st;
 	char *sign;
 	size_t sz;
 
-	len = snprintf(ppath, MAXPATHLEN + 1, "%s/.srfs/id_rsa.key",
-		       srfs_homebyuid(usrctx.uid));
-	if (len == MAXPATHLEN)
+	if (stat(path, &st) == -1)
 		return (0);
 
-	if (!srfs_rsa_sign_path(ppath, sign_challenge(), SRFS_CHALLENGE_SZ,
+	if (st.st_uid != usrctx.uid)
+		return (0);
+
+	if (!srfs_rsa_sign_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
 				&sign, &sz))
 		return (0);
 
 	SRFS_IOBUF_RESET(req);
 	srfs_requesthdr_fill(req, SRFS_LOGIN);
-	srfs_iobuf_add8(req, SRFS_AUTH_SRFS);
+	srfs_iobuf_add8(req, auth_type);
 	srfs_iobuf_addstr(req, usrctx.usrname);
 	if (!srfs_iobuf_addptr(req, sign, sz)) {
 		free(sign);
@@ -295,6 +295,26 @@ srfs_client_user_login(void)
 	sfrs_set_authenticated(usrctx.usrname);
 
 	return (1);
+}
+
+int
+srfs_client_user_login(void)
+{
+	char path[MAXPATHLEN + 1];
+	size_t len;
+
+	len = snprintf(path, MAXPATHLEN + 1, "%s/.srfs/id_rsa.key",
+		       srfs_homebyuid(usrctx.uid));
+	if (len < MAXPATHLEN)
+		if (srfs_client_user_login_path(path, SRFS_AUTH_SRFS))
+			return (1);
+
+	len = snprintf(path, MAXPATHLEN + 1, "%s/.ssh/id_rsa",
+		       srfs_homebyuid(usrctx.uid));
+	if (len < MAXPATHLEN)
+		return (srfs_client_user_login_path(path, SRFS_AUTH_SSH));
+
+	return (0);
 }
 
 srfs_id_t
@@ -754,4 +774,26 @@ srfs_client_readlink(char *path, char *buf, size_t size)
 	buf[sz] = '\0';
 
 	return (sz);
+}
+
+int
+srfs_client_utimens(char *path, struct timespec times[2], int flag)
+{
+	struct srfs_timespec stm[2];
+
+	if (!srfs_request_fill_path(req, SRFS_UTIMENS, path))
+		return (0);
+
+	stm[0].tv_sec = htobe64(times[0].tv_sec);
+	stm[0].tv_nsec = htobe32(times[0].tv_nsec);
+	stm[1].tv_sec = htobe64(times[1].tv_sec);
+	stm[1].tv_nsec = htobe32(times[1].tv_nsec);
+
+	if (!srfs_iobuf_addptr(req, (char *)&stm, sizeof(stm)))
+		return (srfs_return_errno(EIO));
+
+	if (!srfs_iobuf_add32(req, flag))
+		return (srfs_return_errno(EIO));
+
+	return (srfs_execute_rpc(req, resp));
 }

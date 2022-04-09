@@ -43,7 +43,6 @@
 #include <sys/statvfs.h>
 #include <arpa/inet.h>
 
-
 #include "srfs_pki.h"
 #include "srfs_sock.h"
 #include "srfs_iobuf.h"
@@ -94,11 +93,16 @@ static char *srfs_opcodes[] = {
 	"SRFS_SYMLINK",
 	"SRFS_READLINK",
 	"SRFS_UNLINK",
-	"SRFS_RENAME"
+	"SRFS_RENAME",
+	"SRFS_UTIMENS"
 };
+
+srfs_server_config_t *server_config = NULL;
 
 static int srfs_get_path(srfs_iobuf_t *req, char *path);
 static int srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path);
+
+static int srfs_mount_writable(void);
 
 //static int srfs_not_implemented(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_invalid_opcode(srfs_iobuf_t *req, srfs_iobuf_t *resp);
@@ -122,6 +126,7 @@ static int srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_readlink(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 static int srfs_rename(srfs_iobuf_t *req, srfs_iobuf_t *resp);
+static int srfs_utimens(srfs_iobuf_t *req, srfs_iobuf_t *resp);
 
 static srfs_server_func_t srfs_server_funcs[] = {
 	srfs_mount,			// SRFS_MOUNT
@@ -142,6 +147,7 @@ static srfs_server_func_t srfs_server_funcs[] = {
 	srfs_readlink,			// SRFS_READLINK
 	srfs_unlink,			// SRFS_UNLINK
 	srfs_rename,			// SRFS_RENAME
+	srfs_utimens,			// SRFS_UTIMENS
 	srfs_invalid_opcode		// SRFS_OPCODE_MAX
 };
 
@@ -156,13 +162,21 @@ static srfs_export_t *exported = NULL;
 void
 srfs_server_init(void)
 {
+	srfs_server_config_t *cnf;
+
 	reqbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
 	respbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
+
+	server_config = calloc(1, sizeof(srfs_server_config_t));
 
 	LIST_INIT(&file_cache);
 	LIST_INIT(&dir_cache);
 
 	srfs_usrgrp_init();
+
+	cnf = server_config;
+	cnf->allow_unknown_clients = 0;
+	cnf->auth_methods = SRFS_AUTH_METHOD_SRFS | SRFS_AUTH_METHOD_SSH;
 }
 
 void
@@ -308,6 +322,7 @@ srfs_verify_host(char *buf, size_t sz)
 			       "with host key %s", srfs_remote_ipstr(),
 			       dire->d_name);
 			res = 1;
+			client_authenticated = 1;
 			break;
 		}
 	}
@@ -322,27 +337,34 @@ srfs_verify_host(char *buf, size_t sz)
 }
 
 static int
-srfs_verify_user(char *usrname, char *buf, size_t sz)
+srfs_verify_user_srfs(char *usrname, char *buf, size_t sz)
 {
 	char path[MAXPATHLEN + 1];
 	int res = 0;
 	char *home;
 	uid_t uid;
 
+	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_SRFS)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication: auth_method `srfs_auth' disabled "
+		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
+		return (0);
+	}
+
 	if (srfs_usrisnobody(usrname))
 		return (0);
 
 	uid = srfs_uidbyname(usrname);
 	if (!(home = srfs_homebyuid(uid))) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs'"
 		       "authentication: no homedir", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
 	}
 
-	if (snprintf(path, MAXPATHLEN + 1, "%s/.srfs/id_rsa.pub",
+	if (snprintf(path, MAXPATHLEN + 1, "%s/.srfs/authorized_keys",
 		     home) == MAXPATHLEN) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs'"
 		       "authentication: path too long", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
@@ -365,9 +387,72 @@ srfs_verify_user(char *usrname, char *buf, size_t sz)
 }
 
 static int
+srfs_verify_user_ssh(char *usrname, char *buf, size_t sz)
+{
+	char path[MAXPATHLEN + 1];
+	int res = 0;
+	char *home;
+	uid_t uid;
+
+	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_SSH)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication: auth_method `ssh_auth' disabled "
+		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
+		return (0);
+	}
+
+	if (srfs_usrisnobody(usrname))
+		return (0);
+
+	uid = srfs_uidbyname(usrname);
+	if (!(home = srfs_homebyuid(uid))) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh'"
+		       "authentication: no homedir", srfs_remote_ipstr(),
+		       usrname);
+		return (0);
+	}
+
+	if (snprintf(path, MAXPATHLEN + 1, "%s/.ssh/authorized_keys",
+		     home) == MAXPATHLEN) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh'"
+		       "authentication: path too long", srfs_remote_ipstr(),
+		       usrname);
+		return (0);
+	}
+
+	if (srfs_ssh_verify_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
+				 buf, sz)) {
+		res = 1;
+		client_authenticated = 1;
+		sfrs_set_authenticated(usrname);
+		syslog(LOG_AUTH | LOG_INFO, "%s: user %s authenticated "
+		       "with ssh key %s", srfs_remote_ipstr(), usrname, path);
+	} else {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed ssh "
+		       "authentication with key %s", srfs_remote_ipstr(),
+		       usrname, path);
+	}
+
+	return (res);
+}
+
+static int
+srfs_verify_user_pwd(char *usrname, char *passwd)
+{
+	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_PWD)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
+		       "authentication: auth_method `password' disabled "
+		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
+		return (0);
+	}
+
+	return (1);
+}
+
+static int
 srfs_login(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
-	char *buf, *usrname;
+	char *buf, *usrname, *passwd;
 	srfs_auth_t auth;
 	size_t sz;
 
@@ -376,25 +461,46 @@ srfs_login(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 
 	auth = srfs_iobuf_get8(req);
 
+	if (auth != SRFS_AUTH_HOST && !server_config->allow_unknown_clients &&
+	    !client_authenticated) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: client did not "
+		       "authenticate with host key", srfs_remote_ipstr());
+
+		srfs_err_response(resp, SRFS_ENEEDAUTH);
+		exit(0);
+	}
+
 	switch (auth) {
 	case SRFS_AUTH_HOST:
 		buf = req->ptr;
 		sz = SRFS_IOBUF_LEFT(req);
 		if (!srfs_verify_host(buf, sz))
 			return (srfs_err_response(resp, SRFS_EACCESS));
-		client_authenticated = 1;
 		break;
 	case SRFS_AUTH_SRFS:
 		if (!(usrname = srfs_iobuf_getstr(req)))
 			return (srfs_err_response(resp, SRFS_EIO));
 		buf = req->ptr;
 		sz = SRFS_IOBUF_LEFT(req);
-		if (!srfs_verify_user(usrname, buf, sz))
+		if (!srfs_verify_user_srfs(usrname, buf, sz))
 			return (srfs_err_response(resp, SRFS_EACCESS));
-		client_authenticated = 1;
 		break;
-	case SRFS_AUTH_SSH: break;
-	case SRFS_AUTH_PWD: break;
+	case SRFS_AUTH_SSH:
+		if (!(usrname = srfs_iobuf_getstr(req)))
+			return (srfs_err_response(resp, SRFS_EIO));
+		buf = req->ptr;
+		sz = SRFS_IOBUF_LEFT(req);
+		if (!srfs_verify_user_ssh(usrname, buf, sz))
+			return (srfs_err_response(resp, SRFS_EACCESS));
+		break;
+	case SRFS_AUTH_PWD:
+		if (!(usrname = srfs_iobuf_getstr(req)))
+			return (srfs_err_response(resp, SRFS_EIO));
+		if (!(passwd = srfs_iobuf_getstr(req)))
+			return (srfs_err_response(resp, SRFS_EIO));
+		if (!srfs_verify_user_pwd(usrname, passwd))
+			return (srfs_err_response(resp, SRFS_EACCESS));
+		break;
 	default: return (srfs_err_response(resp, SRFS_ENOTSUP));
 	}
 
@@ -420,6 +526,8 @@ srfs_mount(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 		return (srfs_err_response(resp, SRFS_ENOENT));
 
 	exported = export;
+
+	setproctitle("handler %s [%s]", srfs_remote_ipstr(), export->share);
 
 	return (1);
 }
@@ -538,6 +646,15 @@ srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path)
 }
 
 static int
+srfs_mount_writable(void)
+{
+	if (!exported)
+		return (0);
+
+	return (exported->flags & SRFS_EXPORT_FLAG_RW);
+}
+
+static int
 srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
@@ -551,6 +668,9 @@ srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	if (statvfs(path, &vfs) == -1)
 		return (srfs_errno_response(resp));
 
+	if (!srfs_mount_writable())
+		vfs.f_flag |= ST_RDONLY;
+
 	svfs.f_bavail = htobe64(vfs.f_bavail);
 	svfs.f_bfree = htobe64(vfs.f_bfree);
 	svfs.f_blocks = htobe64(vfs.f_blocks);
@@ -558,7 +678,7 @@ srfs_statvfs(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	svfs.f_ffree = htobe64(vfs.f_ffree);
 	svfs.f_files = htobe64(vfs.f_files);
 	svfs.f_bsize = htobe64(vfs.f_bsize);
-	svfs.f_flag = htobe64(vfs.f_flag); // TODO when RO implemented, override
+	svfs.f_flag = htobe64(vfs.f_flag);
 	svfs.f_frsize = htobe64(vfs.f_frsize);
 	svfs.f_fsid = htobe64(vfs.f_fsid);
 	namelen = MIN(SRFS_MAXNAMLEN, vfs.f_namemax);
@@ -700,6 +820,9 @@ srfs_create(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	char path[SRFS_MAXPATHLEN + 1];
 	int fd, mode;
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
 
@@ -801,6 +924,9 @@ srfs_write(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 	srfs_file_t *file;
 	int w;
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
@@ -857,6 +983,9 @@ srfs_unlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
 
@@ -871,6 +1000,9 @@ srfs_mkdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	mode_t mode;
+
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
 
 	if (!srfs_get_path_nonexistent(req, path))
 		return (srfs_errno_response(resp));
@@ -891,6 +1023,9 @@ srfs_rmdir(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
 
@@ -905,6 +1040,9 @@ srfs_chmod(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	mode_t mode;
+
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
@@ -925,6 +1063,9 @@ srfs_chown(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char path[SRFS_MAXPATHLEN + 1];
 	char *usr, *grp;
+
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
 
 	if (!srfs_get_path(req, path))
 		return (srfs_errno_response(resp));
@@ -965,6 +1106,9 @@ srfs_link(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path_nonexistent(req, src))
 		return (srfs_errno_response(resp));
 
@@ -987,6 +1131,9 @@ srfs_symlink(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 		return (0);
 	}
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!(src = srfs_iobuf_getstr(req)))
 		return (srfs_errno_response(resp));
 
@@ -1004,6 +1151,9 @@ srfs_rename(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 {
 	char src[SRFS_MAXPATHLEN + 1], dst[SRFS_MAXPATHLEN + 1];
 
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
 	if (!srfs_get_path(req, src))
 		return (srfs_errno_response(resp));
 
@@ -1011,6 +1161,41 @@ srfs_rename(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 		return (srfs_errno_response(resp));
 
 	if (rename(src, dst) == -1)
+		return (srfs_errno_response(resp));
+
+	return (1);
+}
+
+static int
+srfs_utimens(srfs_iobuf_t *req, srfs_iobuf_t *resp)
+{
+	char path[SRFS_MAXPATHLEN + 1];
+	struct srfs_timespec *stm;
+	struct timespec times[2];
+	size_t sz;
+	int flag;
+
+	if (!srfs_mount_writable())
+		return (srfs_err_response(resp, SRFS_EPERM));
+
+	if (!srfs_get_path(req, path))
+		return (srfs_errno_response(resp));
+
+	sz = sizeof(struct srfs_timespec) * 2 + sizeof(int);
+	if (SRFS_IOBUF_LEFT(resp) != sz)
+		return (srfs_err_response(resp, SRFS_EIO));
+
+	sz = sizeof(struct srfs_timespec) * 2;
+	if (!(stm = (struct srfs_timespec *)srfs_iobuf_getptr(resp, sz)))
+		return (srfs_err_response(resp, SRFS_EIO));
+	flag = srfs_iobuf_get32(resp);
+
+	times[0].tv_sec = be64toh(stm[0].tv_sec);
+	times[0].tv_nsec = be32toh(stm[0].tv_nsec);
+	times[1].tv_sec = be64toh(stm[1].tv_sec);
+	times[1].tv_nsec = be32toh(stm[1].tv_nsec);
+
+	if (utimensat(-1, path, times, flag) == -1)
 		return (srfs_errno_response(resp));
 
 	return (1);

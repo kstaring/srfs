@@ -46,4 +46,7 @@ int srfs_rsa_verify(RSA *pub, char *msg, size_t msgsize,
 int srfs_rsa_verify_path(char *path, char *msg, size_t msgsize,
 			 char *sign, size_t signsize);
 
+int srfs_ssh_verify_path(char *path, char *msg, size_t msgsize,
+			 char *sign, size_t signsize);
+
 #endif

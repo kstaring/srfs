@@ -366,6 +366,8 @@ static int
 srfs_fuse_utimens(const char *path, const struct timespec tv[2])
 {
 	srfs_fuse_setusrctx();
+	if (!srfs_client_utimens((char *)path, (struct timespec *)tv, 0))
+		return (-errno);
 
 	return (0);
 }

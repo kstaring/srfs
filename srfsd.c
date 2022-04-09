@@ -99,7 +99,7 @@ server_accept(void)
 		main_daemon = 0;
 		srfs_accept_client();
 
-		setproctitle("handler");
+		setproctitle("handler %s", srfs_remote_ipstr());
 	}
 }
 
@@ -142,13 +142,11 @@ main(int argc, char *argv[])
 	uint64_t port = SRFS_PORT;
 	char *endptr = NULL;
 	int daemonize = 1;
-	int debug = 0;
 	int ch;
 
 	while ((ch = getopt(argc, argv, "fdp:c:")) != -1) {
 		switch (ch) {
 		case 'f': daemonize = 0; break;
-		case 'd': debug = 1; break;
 		case 'p':
 			port = strtol(optarg, &endptr, 10);
 			if (endptr == NULL || *endptr != '\0' || port == 0 ||
@@ -176,7 +174,7 @@ main(int argc, char *argv[])
 		signal(SIGQUIT, SIG_IGN);
 		signal(SIGHUP, SIG_IGN);
 	}
-if (debug) { }
+
 	setproctitle("listener");
 
 	server_accept_loop();

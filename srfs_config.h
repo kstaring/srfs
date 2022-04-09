@@ -37,8 +37,20 @@
 
 #define SRFS_AUTH_SOCKET "/var/run/srfs_auth.sock"
 
-#define SRFS_HOST_PRIVKEY SRFS_BASE_CONFIG_PATH "/host.key"
-#define SRFS_HOST_PUBKEY SRFS_BASE_CONFIG_PATH "/host.pub"
-#define SRFS_HOST_CERT SRFS_BASE_CONFIG_PATH "/host.crt"
+#define SRFS_SERVER_PRIVKEY SRFS_BASE_CONFIG_PATH "/server.key"
+#define SRFS_SERVER_CERT SRFS_BASE_CONFIG_PATH "/server.crt"
+
+#define SRFS_CLIENT_PRIVKEY SRFS_BASE_CONFIG_PATH "/client.key"
+#define SRFS_CLIENT_PUBKEY SRFS_BASE_CONFIG_PATH "/client.pub"
+
+#define SRFS_AUTH_METHOD_SRFS	(1 << 0)
+#define SRFS_AUTH_METHOD_SSH	(1 << 1)
+#define SRFS_AUTH_METHOD_PWD	(1 << 2)
+
+typedef struct srfs_server_config {
+	int allow_unknown_clients;
+	int auth_methods;
+} srfs_server_config_t;
+extern srfs_server_config_t *server_config;
 
 #endif

@@ -78,6 +78,8 @@ extern int srfs_client_readlink(char *path, char *buf, size_t size);
 
 extern int srfs_client_rename(char *src, char *dst);
 
+extern int srfs_client_utimens(char *path, struct timespec times[2], int flag);
+
 extern srfs_id_t srfs_serial(void);
 extern int srfs_request(srfs_opcode_t opcode);
 extern int srfs_response(void);

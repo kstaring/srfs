@@ -49,29 +49,46 @@ exports_parse_line(char *line, int line_nr, int *exportidx)
 	srfs_export_t *export;
 	char *share;
 	char *localdir;
+	char *options;
+	int flags;
 	char *t;
 	int i;
 
+	flags = 0;
+	options = NULL;
 	for (i = 0, t = strtok(line, " \t"); t; t = strtok(NULL, " \t"), i++) {
 		if  (t[0] == '#')
 			break;
 		if  (t[0] == '\n')
 			break;
-		if (i >= 2) {
+		if (i > 3) {
 			printf("ignoring invalid exports line %d\n", line_nr);
 			return;
 		}
 
 		if (i == 0) share = t;
 		if (i == 1) localdir = t;
+		if (i == 2) options = t;
 	}
 
-	if (i == 2) {
-		if ((t = index(localdir, '\n')))
+	if (i == 3) {
+		if ((t = index(options, '\n')))
 			*t = '\0';
+		if (options) {
+			if (strcmp(options, "ro") == 0)
+				flags = SRFS_EXPORT_FLAG_RO;
+			else if (strcmp(options, "rw") == 0)
+				flags = SRFS_EXPORT_FLAG_RW;
+			else {
+				printf("ignoring invalid line %d, unknown "
+				       "option %s\n", line_nr, options);
+				return;
+			}
+		}
 		export = malloc(sizeof(srfs_export_t));
 		export->share = strdup(share);
 		export->localdir = strdup(localdir);
+		export->flags = flags;
 
 		if (*exportidx == exportsize) {
 			exportsize += 10;
