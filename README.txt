@@ -13,9 +13,9 @@ SRFS features include the following:
 - Users must authenticate with the SRFS server before being able to access
   files on its exported filesystems.
   - srfs can leverage SSH infrastructure to transparently authenticate with
-    authorized_keys. (This is not yet implemented.)
+    authorized_keys.
   - srfs_auth to authenticate with a username and password, which might
-    be integrated in PAM or similar system. (Also yet to be implemented.)
+    be integrated in PAM or similar system.
 - User- and group IDs are transparently rewritten; users and groups not
   present on the client are presented as 'nobody' and 'nogroup'. In other
   words: there is no need for uids and gids to be equal on the client and
