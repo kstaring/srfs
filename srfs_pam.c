@@ -27,26 +27,58 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_PKI_H
-#define _SRFS_PKI_H
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <security/pam_appl.h>
 
-#include <openssl/crypto.h>
+static char *password = NULL;
 
-extern int srfs_load_hostkeys(void);
+static int
+checkconv(int num_msg, const struct pam_message **msgs,
+	 struct pam_response **resp, void *appdata_ptr)
+{
+	struct pam_response *resps;
+	struct pam_response *rsp;
+	struct pam_message *msg;
 
-extern RSA *srfs_host_privkey(void);
-extern RSA *srfs_host_pubkey(void);
+	if (num_msg <= 0)
+		return (PAM_CONV_ERR);
 
-extern int srfs_rsa_sign(RSA *priv, char *msg, size_t msgsize,
-			 char **sign, size_t *signsize);
-extern int srfs_rsa_sign_path(char *path, char *msg, size_t msgsize,
-			      char **sign, size_t *signsize);
-extern int srfs_rsa_verify(RSA *pub, char *msg, size_t msgsize,
-			   char *sign, size_t signsize);
-extern int srfs_rsa_verify_path(char *path, char *msg, size_t msgsize,
-				char *sign, size_t signsize);
+	if (!(resps = calloc(num_msg, sizeof(struct pam_response))))
+		return (PAM_CONV_ERR);
 
-extern int srfs_ssh_verify_path(char *path, char *msg, size_t msgsize,
-				char *sign, size_t signsize);
+	for (int i = 0; i < num_msg; i++) {
+		msg = (struct pam_message *)msgs[i];
+		rsp = &resps[i];
+		if (msg->msg_style == PAM_PROMPT_ECHO_OFF)
+			rsp->resp = strdup(password);
+		rsp->resp_retcode = 0;
+	}
 
-#endif
+	*resp = resps;
+
+	return (PAM_SUCCESS);
+}
+
+int
+srfs_pam_auth(char *user, char *pass)
+{
+	struct pam_conv pconv = { checkconv, NULL };
+	pam_handle_t *pamh;
+	int res;
+
+	password = pass;
+
+	if (pam_start("srfs", user, &pconv, &pamh) != PAM_SUCCESS)
+		return (0);
+
+	res = pam_authenticate(pamh, 0);
+
+	pam_end(pamh, res);
+
+	password = NULL;
+
+	return (res == PAM_SUCCESS);
+}

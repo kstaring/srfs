@@ -39,9 +39,12 @@
 #include <string.h>
 #include <signal.h>
 #include <dirent.h>
-#include <arpa/inet.h>
+#include <unistd.h>
+#include <sys/un.h>
 #include <sys/param.h>
 #include <sys/mount.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <fuse_opt.h>
 #include <fuse_lowlevel.h>
 
@@ -51,8 +54,13 @@
 #include "srfs_client.h"
 #include "srfs_usrgrp.h"
 
+#define SRFS_AUTH_ERR_INPUT "Illegal input"
+#define SRFS_AUTH_ERR_FAILED "Login failed"
+#define SRFS_AUTH_ERR_ALREADY "User already logged in"
+#define SRFS_AUTH_OK "User logged in"
+
 static void sigint(int signal);
-_Noreturn static void srfs_usage(void);
+static int srfs_usage(void);
 
 static int srfs_fuse_statfs(const char *path, struct statvfs *vfs);
 static int srfs_fuse_getattr(const char *path, struct stat *st);
@@ -112,6 +120,7 @@ static struct fuse_chan *chan = NULL;
 static struct fuse_session *sess = NULL;
 static char *serverpath = NULL;
 static char *mountpoint = NULL;
+static int auth_fd = -1;
 
 static void
 sigint(int signal)
@@ -123,12 +132,12 @@ sigint(int signal)
 	exit(0);
 }
 
-_Noreturn static void
+static int
 srfs_usage(void)
 {
 	printf("Usage: srfs [server:/share] [local mountpoint]\n\n");
 
-	exit(1);
+	return (1);
 }
 
 inline static void
@@ -378,7 +387,7 @@ srfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 	switch (key) {
 	case FUSE_OPT_KEY_OPT:
 		if (strcmp(arg, "-h") == 0)
-			srfs_usage();
+			return srfs_usage();
 		break;
 	case FUSE_OPT_KEY_NONOPT:
 		if (!serverpath && strchr(arg, ':')) {
@@ -414,6 +423,81 @@ fuse_event_handle(struct fuse_buf *connbuf, struct fuse_chan *ch)
 	return (1);
 }
 
+static void
+srfs_handle_auth(void)
+{
+	char *user, *pass, *ptr;
+	struct sockaddr_un un;
+#ifdef linux
+	struct ucred ucred;
+#else
+	uid_t uid;
+	gid_t gid;
+#endif
+	char buf[1024];
+	socklen_t len;
+	size_t rd;
+	int fd;
+
+	len = sizeof(struct sockaddr_un);
+	if ((fd = accept(auth_fd, (struct sockaddr *)&un, &len)) == -1) {
+		close(fd);
+		return;
+	}
+
+#ifdef linux
+	len = sizeof(struct ucred);
+	bzero(&ucred, len);
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
+		close(fd);
+		return;
+	}
+
+	uid = ucred.uid;
+#else
+	if (getpeereid(fd, &uid, &gid) == -1) {
+		close(fd);
+		return;
+	}
+#endif
+	if (!uid) {
+		close(fd);
+		return;
+	}
+
+	if (srfs_uid_authenticated(uid)) {
+		write(fd, SRFS_AUTH_ERR_ALREADY, strlen(SRFS_AUTH_ERR_ALREADY));
+		close(fd);
+		return;
+	}
+
+	// TODO should be handled async since one client can connect() and
+	// not send data, hanging the whole process and mount
+	if ((rd = read(fd, buf, 1024)) < 2) {
+		close(fd);
+		return;
+	}
+	buf[rd] = '\0';
+
+	for (user = ptr = buf; *ptr && ptr - buf < rd; ptr++) { }
+	if (ptr - buf == rd) {
+		write(fd, SRFS_AUTH_ERR_INPUT, strlen(SRFS_AUTH_ERR_INPUT));
+		close(fd);
+		return;
+	}
+	pass = ptr + 1;
+
+	if (!srfs_client_user_login_pwd(uid, user, pass)) {
+		write(fd, SRFS_AUTH_ERR_FAILED, strlen(SRFS_AUTH_ERR_FAILED));
+		close(fd);
+		return;
+	}
+
+	write(fd, SRFS_AUTH_OK, strlen(SRFS_AUTH_OK));
+
+	close(fd);
+}
+
 static int
 srfs_fuse_loop(void)
 {
@@ -435,21 +519,16 @@ srfs_fuse_loop(void)
 
 		pollfds[0].fd = fuse_chan_fd(chan);
 		pollfds[0].events = POLLIN;
-		pollfds[1].fd = srfs_sock_fd();
-#if defined(POLLRDHUP)
-		pollfds[1].events = POLLRDHUP;
-#else
-		pollfds[1].events = POLLERR | POLLHUP;
-#endif
+		pollfds[1].fd = auth_fd;
+		pollfds[1].events = POLLIN;
 
-		if ((n = poll(pollfds, 1, 1000)) > 0) {
+		if ((n = poll(pollfds, 2, 1000)) > 0) {
 			if (pollfds[0].revents & POLLIN) {
 				if (!fuse_event_handle(&connbuf, ch))
 					break;
 			}
-			if (pollfds[1].revents) {
-				printf("server socket hup!\n");
-			}
+			if (pollfds[1].revents)
+				srfs_handle_auth();
 		}
 	}
 
@@ -485,6 +564,37 @@ srfs_connect(char *server_path)
 	return (1);
 }
 
+static void
+srfs_auth_socket_open(char *server, char *mountpoint)
+{
+	struct sockaddr_un un;
+	socklen_t len;
+	size_t n;
+
+	len = sizeof(struct sockaddr_un);
+	bzero(&un, len);
+	un.sun_family = AF_UNIX;
+	n = snprintf(un.sun_path, SUNPATHLEN - 1, "/var/run/srfs-auth%s.sock",
+		     mountpoint);
+	if (n == SUNPATHLEN)
+		err(ENAMETOOLONG, "Couldn't open auth socket for %s", server);
+
+	for (int i = 18; un.sun_path[i]; i++)
+		if (un.sun_path[i] == '/')
+			un.sun_path[i] = '-';
+
+	if ((auth_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+		err(errno, "Couldn't create auth socket fd");
+
+	unlink(un.sun_path);
+	if (bind(auth_fd, (struct sockaddr *)&un, len) == -1)
+		err(errno, "Couldn't bind auth socket %s", un.sun_path);
+	chmod(un.sun_path, 0666);
+
+	if (listen(auth_fd, 5) == -1)
+		err(errno, "Couldn't listen on auth socket %s", un.sun_path);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -511,7 +621,7 @@ main(int argc, char *argv[])
 		return (1);
 
 	if (!serverpath || !mountpoint)
-		srfs_usage();
+		return srfs_usage();
 
 	if (!srfs_sock_client_init())
 		return (1);
@@ -519,11 +629,13 @@ main(int argc, char *argv[])
 	srfs_client_init();
 	srfs_load_hostkeys();
 
+	srfs_auth_socket_open(serverpath, mountpoint);
+
 	if (!srfs_connect(serverpath))
-		srfs_usage();
+		return srfs_usage();
 
 	if (!(chan = fuse_mount(mountpoint, &args)))
-		srfs_usage();
+		return srfs_usage();
 
 	if (!(fuse = fuse_new(chan, &args, &fops,
 			      sizeof(struct fuse_operations), NULL))) {

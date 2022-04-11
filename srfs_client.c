@@ -292,7 +292,33 @@ srfs_client_user_login_path(char *path, uint8_t auth_type)
 	if (!srfs_execute_rpc(req, resp))
 		return (0);
 
-	sfrs_set_authenticated(usrctx.usrname);
+	sfrs_set_authenticated(usrctx.usrname, NULL);
+
+	return (1);
+}
+
+int
+srfs_client_user_login_pwd(uid_t uid, char *rmtuser, char *pass)
+{
+	char *name;
+
+	if (!(name = srfs_namebyuid(uid))) {
+		errno = ENOENT;
+		return (0);
+	}
+	if (rmtuser && strcmp(name, rmtuser) != 0)
+		name = rmtuser;
+
+	SRFS_IOBUF_RESET(req);
+	srfs_requesthdr_fill(req, SRFS_LOGIN);
+	srfs_iobuf_add8(req, SRFS_AUTH_PWD);
+	srfs_iobuf_addstr(req, name);
+	srfs_iobuf_addstr(req, pass);
+
+	if (!srfs_execute_rpc(req, resp))
+		return (0);
+
+	sfrs_set_authenticated(srfs_namebyuid(uid), rmtuser);
 
 	return (1);
 }

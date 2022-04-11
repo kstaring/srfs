@@ -51,6 +51,7 @@ struct srfs_grpcache {
 
 struct srfs_authuser {
 	char usrname[SRFS_MAXLOGNAMELEN];
+	char rmtname[SRFS_MAXLOGNAMELEN];
 	uid_t uid;
 	gid_t gid;
 	LIST_ENTRY(srfs_authuser) list;
@@ -243,7 +244,7 @@ srfs_usrisnobody(char *usrname)
 }
 
 void
-sfrs_set_authenticated(char *usrname)
+sfrs_set_authenticated(char *usrname, char *rmtname)
 {
 	struct srfs_authuser *user;
 	uid_t uid;
@@ -257,6 +258,10 @@ sfrs_set_authenticated(char *usrname)
 
 	user = malloc(sizeof(struct srfs_authuser));
 	strcpy(user->usrname, usrname);
+	if (rmtname)
+		strcpy(user->rmtname, rmtname);
+	else
+		user->rmtname[0] = '\0';
 	user->uid = uid;
 	user->gid = gid;
 

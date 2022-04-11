@@ -44,6 +44,10 @@ extern int srfs_client_connect(char *server, char *path);
 extern size_t srfs_maxpacketsize(void);
 
 extern void srfs_set_usrctx(uid_t uid, gid_t gid);
+
+extern int srfs_client_user_login_pwd(uid_t uid, char *rmtuser,
+				      char *pass);
+
 extern int srfs_client_user_login(void);
 
 extern int srfs_client_host_login(void);

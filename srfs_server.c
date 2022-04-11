@@ -44,6 +44,7 @@
 #include <arpa/inet.h>
 
 #include "srfs_pki.h"
+#include "srfs_pam.h"
 #include "srfs_sock.h"
 #include "srfs_iobuf.h"
 #include "srfs_config.h"
@@ -374,7 +375,7 @@ srfs_verify_user_srfs(char *usrname, char *buf, size_t sz)
 				 buf, sz)) {
 		res = 1;
 		client_authenticated = 1;
-		sfrs_set_authenticated(usrname);
+		sfrs_set_authenticated(usrname, NULL);
 		syslog(LOG_AUTH | LOG_INFO, "%s: user %s authenticated "
 		       "with user key %s", srfs_remote_ipstr(), usrname, path);
 	} else {
@@ -424,7 +425,7 @@ srfs_verify_user_ssh(char *usrname, char *buf, size_t sz)
 				 buf, sz)) {
 		res = 1;
 		client_authenticated = 1;
-		sfrs_set_authenticated(usrname);
+		sfrs_set_authenticated(usrname, NULL);
 		syslog(LOG_AUTH | LOG_INFO, "%s: user %s authenticated "
 		       "with ssh key %s", srfs_remote_ipstr(), usrname, path);
 	} else {
@@ -445,6 +446,15 @@ srfs_verify_user_pwd(char *usrname, char *passwd)
 		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
 		return (0);
 	}
+
+	if (!srfs_pam_auth(usrname, passwd)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_pwd'"
+		       "authentication", srfs_remote_ipstr(), usrname);
+		return (0);
+	}
+
+	syslog(LOG_AUTH | LOG_INFO, "%s: user %s authenticated "
+	       "with password", srfs_remote_ipstr(), usrname);
 
 	return (1);
 }

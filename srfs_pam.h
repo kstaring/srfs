@@ -27,26 +27,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _SRFS_PKI_H
-#define _SRFS_PKI_H
+#ifndef _SRFS_PAM_H
+#define _SRFS_PAM_H
 
-#include <openssl/crypto.h>
-
-extern int srfs_load_hostkeys(void);
-
-extern RSA *srfs_host_privkey(void);
-extern RSA *srfs_host_pubkey(void);
-
-extern int srfs_rsa_sign(RSA *priv, char *msg, size_t msgsize,
-			 char **sign, size_t *signsize);
-extern int srfs_rsa_sign_path(char *path, char *msg, size_t msgsize,
-			      char **sign, size_t *signsize);
-extern int srfs_rsa_verify(RSA *pub, char *msg, size_t msgsize,
-			   char *sign, size_t signsize);
-extern int srfs_rsa_verify_path(char *path, char *msg, size_t msgsize,
-				char *sign, size_t signsize);
-
-extern int srfs_ssh_verify_path(char *path, char *msg, size_t msgsize,
-				char *sign, size_t signsize);
+extern int srfs_pam_auth(char *user, char *pass);
 
 #endif
