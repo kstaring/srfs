@@ -89,6 +89,11 @@ main(int argc, char *argv[])
 	if (strlen(user) >= SRFS_MAXLOGNAMELEN)
 		err(ENAMETOOLONG, "Username too long: %s", user);
 
+	printf("***************************************************\n");
+	printf("* WARNING: it is not advised to use srfs_auth to  *\n");
+	printf("* authenticate with an SRFS mount! Please use the *\n");
+	printf("* authorized_keys methods instead for safety!     *\n");
+	printf("***************************************************\n");
 	strcpy(userpass, user);
 	user = userpass;
 	pass = user + strlen(user) + 1;
@@ -100,7 +105,7 @@ main(int argc, char *argv[])
 	len = sizeof(struct sockaddr_un);
 	bzero(&un, len);
 	un.sun_family = AF_UNIX;
-	if (snprintf(un.sun_path, SUNPATHLEN, "/var/run/srfs-auth%s.sock", path) == SUNPATHLEN)
+	if (snprintf(un.sun_path, SUNPATHLEN, "/var/run/srfs-auth%s.sock", path) >= SUNPATHLEN)
 		err(ENAMETOOLONG, "Socket path too long for local "
 		    "mountpoint %s", path);
 

@@ -30,6 +30,7 @@
 #include <err.h>
 #include <errno.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/endian.h>
 #include <openssl/ssl.h>
 #include <openssl/evp.h>
@@ -50,6 +51,10 @@ srfs_load_privkey(char *path)
 		return (NULL);
 	res = PEM_read_RSAPrivateKey(f, NULL, NULL, NULL);
 	fclose(f);
+
+	if (!res)
+		syslog(LOG_AUTH | LOG_NOTICE, "Could not load private key "
+		       "%s for authentication purposes", path);
 
 	return (res);
 }

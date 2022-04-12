@@ -314,7 +314,7 @@ srfs_verify_host(char *buf, size_t sz)
 		if (dire->d_name[0] == '.')
 			continue;
 		if (snprintf(path, MAXPATHLEN + 1, "%s/%s",
-			     SRFS_CLIENT_KEYS_DIR, dire->d_name) == MAXPATHLEN)
+			     SRFS_CLIENT_KEYS_DIR, dire->d_name) >= MAXPATHLEN + 1)
 			continue;
 
 		if (srfs_rsa_verify_path(path, sign_challenge(),
@@ -352,26 +352,30 @@ srfs_verify_user_srfs(char *usrname, char *buf, size_t sz)
 		return (0);
 	}
 
-	if (srfs_usrisnobody(usrname))
+	if (srfs_usrisnobody(usrname)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs' "
+		       "authentication: user not found", srfs_remote_ipstr(),
+		       usrname);
 		return (0);
+	}
 
 	uid = srfs_uidbyname(usrname);
 	if (!(home = srfs_homebyuid(uid))) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs'"
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs' "
 		       "authentication: no homedir", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
 	}
 
 	if (snprintf(path, MAXPATHLEN + 1, "%s/.srfs/authorized_keys",
-		     home) == MAXPATHLEN) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs'"
+		     home) >= MAXPATHLEN + 1) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_srfs' "
 		       "authentication: path too long", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
 	}
 
-	if (srfs_rsa_verify_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
+	if (srfs_ssh_verify_path(path, sign_challenge(), SRFS_CHALLENGE_SZ,
 				 buf, sz)) {
 		res = 1;
 		client_authenticated = 1;
@@ -402,20 +406,24 @@ srfs_verify_user_ssh(char *usrname, char *buf, size_t sz)
 		return (0);
 	}
 
-	if (srfs_usrisnobody(usrname))
+	if (srfs_usrisnobody(usrname)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh' "
+		       "authentication: user not found", srfs_remote_ipstr(),
+		       usrname);
 		return (0);
+	}
 
 	uid = srfs_uidbyname(usrname);
 	if (!(home = srfs_homebyuid(uid))) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh'"
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh' "
 		       "authentication: no homedir", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
 	}
 
 	if (snprintf(path, MAXPATHLEN + 1, "%s/.ssh/authorized_keys",
-		     home) == MAXPATHLEN) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh'"
+		     home) >= MAXPATHLEN + 1) {
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_ssh' "
 		       "authentication: path too long", srfs_remote_ipstr(),
 		       usrname);
 		return (0);
@@ -448,7 +456,7 @@ srfs_verify_user_pwd(char *usrname, char *passwd)
 	}
 
 	if (!srfs_pam_auth(usrname, passwd)) {
-		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_pwd'"
+		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed `auth_pwd' "
 		       "authentication", srfs_remote_ipstr(), usrname);
 		return (0);
 	}
@@ -619,7 +627,7 @@ srfs_translate_path_nonexistent(srfs_iobuf_t *req, char *path)
 		return (0);
 
 	if (snprintf(path, SRFS_MAXPATHLEN + 1, "%s/%s", tmp,
-		     sep + 1) == SRFS_MAXPATHLEN) {
+		     sep + 1) >= SRFS_MAXPATHLEN + 1) {
 		errno = ENAMETOOLONG;
 		return (0);
 	}

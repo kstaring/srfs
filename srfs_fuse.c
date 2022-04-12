@@ -576,7 +576,7 @@ srfs_auth_socket_open(char *server, char *mountpoint)
 	un.sun_family = AF_UNIX;
 	n = snprintf(un.sun_path, SUNPATHLEN - 1, "/var/run/srfs-auth%s.sock",
 		     mountpoint);
-	if (n == SUNPATHLEN)
+	if (n >= SUNPATHLEN)
 		err(ENAMETOOLONG, "Couldn't open auth socket for %s", server);
 
 	for (int i = 18; un.sun_path[i]; i++)

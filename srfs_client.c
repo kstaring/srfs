@@ -252,7 +252,7 @@ srfs_set_usrctx(uid_t uid, gid_t gid)
 	if (uid == usrctx.uid && gid == usrctx.gid)
 		return;
 
-	usr = srfs_namebyuid(uid);
+	usr = srfs_rmtnamebyuid(uid);
 	//usr = srfs_usrconv(uid);
 	grp = srfs_namebygid(gid);
 
@@ -262,12 +262,64 @@ srfs_set_usrctx(uid_t uid, gid_t gid)
 	strcpy(usrctx.grpname, grp);
 }
 
-static int
-srfs_client_user_login_path(char *path, uint8_t auth_type)
+static void
+srfs_client_user_from_config(char *home, char *subdir, char *user)
 {
+	char path[MAXPATHLEN + 1];
+	char srvcontext[256];
+	char *ptr, *idx;
+	char buf[1024];
+	FILE *f;
+
+	user[0] = '\0';
+	if (snprintf(path, MAXPATHLEN + 1, "%s/%s/config",
+		       srfs_homebyuid(usrctx.uid), subdir) >= MAXPATHLEN + 1)
+		return;
+
+	if (!(f = fopen(path, "r")))
+		return;
+
+	srvcontext[0] = '\0';
+	while (fgets(buf, 1024, f)) {
+		buf[1023] = '\0';
+		ptr = buf;
+		for (ptr = buf; *ptr == '\t' || *ptr == ' '; ptr++) { }
+		if (strncmp(ptr, "Host ", 5) == 0) {
+			if ((idx = index(ptr, '\n')))
+				*idx = '\0';
+			strlcpy(srvcontext, ptr + 5, 255);
+		}
+
+		if (strncmp(ptr, "User ", 5) == 0) {
+			if (strcmp(srvcontext, server_host) != 0)
+				continue;
+			ptr += 5;
+			if ((idx = index(ptr, '\n')))
+				*idx = '\0';
+			strcpy(user, ptr);
+			break;
+		}
+	}
+
+	fclose(f);
+}
+
+static int
+srfs_client_user_login_path(char *subdir, uint8_t auth_type)
+{
+	char path[MAXPATHLEN + 1];
+	char user[SRFS_MAXLOGNAMELEN];
+	size_t sz, len;
 	struct stat st;
+	char *home;
 	char *sign;
-	size_t sz;
+
+	home = srfs_homebyuid(usrctx.uid);
+
+	srfs_client_user_from_config(home, subdir, user);
+	len = snprintf(path, MAXPATHLEN + 1, "%s/%s/id_rsa", home, subdir);
+	if (len >= MAXPATHLEN + 1)
+		return (0);
 
 	if (stat(path, &st) == -1)
 		return (0);
@@ -282,7 +334,7 @@ srfs_client_user_login_path(char *path, uint8_t auth_type)
 	SRFS_IOBUF_RESET(req);
 	srfs_requesthdr_fill(req, SRFS_LOGIN);
 	srfs_iobuf_add8(req, auth_type);
-	srfs_iobuf_addstr(req, usrctx.usrname);
+	srfs_iobuf_addstr(req, user[0] ? user : usrctx.usrname);
 	if (!srfs_iobuf_addptr(req, sign, sz)) {
 		free(sign);
 		return (srfs_return_errno(EIO));
@@ -292,7 +344,7 @@ srfs_client_user_login_path(char *path, uint8_t auth_type)
 	if (!srfs_execute_rpc(req, resp))
 		return (0);
 
-	sfrs_set_authenticated(usrctx.usrname, NULL);
+	sfrs_set_authenticated(usrctx.usrname, user[0] ? user : NULL);
 
 	return (1);
 }
@@ -326,21 +378,10 @@ srfs_client_user_login_pwd(uid_t uid, char *rmtuser, char *pass)
 int
 srfs_client_user_login(void)
 {
-	char path[MAXPATHLEN + 1];
-	size_t len;
+	if (srfs_client_user_login_path(".srfs", SRFS_AUTH_SRFS))
+		return (1);
 
-	len = snprintf(path, MAXPATHLEN + 1, "%s/.srfs/id_rsa.key",
-		       srfs_homebyuid(usrctx.uid));
-	if (len < MAXPATHLEN)
-		if (srfs_client_user_login_path(path, SRFS_AUTH_SRFS))
-			return (1);
-
-	len = snprintf(path, MAXPATHLEN + 1, "%s/.ssh/id_rsa",
-		       srfs_homebyuid(usrctx.uid));
-	if (len < MAXPATHLEN)
-		return (srfs_client_user_login_path(path, SRFS_AUTH_SSH));
-
-	return (0);
+	return (srfs_client_user_login_path(".ssh", SRFS_AUTH_SSH));
 }
 
 srfs_id_t
@@ -598,8 +639,7 @@ srfs_client_opendir(char *path, off_t offset)
 	res = malloc(sizeof(srfs_dirlist_t));
 	res->bufsize = resp->bufsize - sizeof(srfs_response_t);
 	res->listbuf = malloc(resp->bufsize);
-	strncpy(res->path, path, SRFS_MAXPATHLEN);
-	res->path[SRFS_MAXPATHLEN] = '\0';
+	strlcpy(res->path, path, SRFS_MAXPATHLEN);
 
 	if (!srfs_client_dirlist_fill(res, offset))
 		return (NULL);
@@ -796,8 +836,7 @@ srfs_client_readlink(char *path, char *buf, size_t size)
 
 	sz = MIN(strlen(lnk), size);
 
-	strncpy(buf, lnk, sz);
-	buf[sz] = '\0';
+	strlcpy(buf, lnk, sz);
 
 	return (sz);
 }

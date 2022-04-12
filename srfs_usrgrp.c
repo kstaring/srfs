@@ -180,6 +180,26 @@ srfs_namebyuid(uid_t uid)
 	return (cache->name);
 }
 
+char *
+srfs_rmtnamebyuid(uid_t uid)
+{
+	struct srfs_pwdcache *cache;
+	struct srfs_authuser *user;
+
+	LIST_FOREACH(user, &authusers, list) {
+		if (user->uid == uid) {
+			if (user->rmtname[0])
+				return (user->rmtname);
+			return (user->usrname);
+		}
+	}
+
+	if (!(cache = pwdcache_by_uid(uid)))
+		return ("nobody");
+
+	return (cache->name);
+}
+
 uid_t
 srfs_uidbyname(char *usrname)
 {
