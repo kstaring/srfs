@@ -40,7 +40,7 @@ extern char *sign_challenge(void);
 extern char *peername(struct sockaddr_storage *addr);
 
 extern int srfs_sock_server_init(void);
-extern int srfs_sock_client_init(void);
+extern int srfs_sock_client_init(int check_cert);
 
 extern void srfs_server_listen(in_port_t port);
 extern void srfs_accept_client(void);

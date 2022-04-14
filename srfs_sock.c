@@ -196,9 +196,14 @@ srfs_sock_generic_init(const SSL_METHOD *method)
 }
 
 int
-srfs_sock_client_init(void)
+srfs_sock_client_init(int check_cert)
 {
-	return (srfs_sock_generic_init(TLS_client_method()));
+	if (!srfs_sock_generic_init(TLS_client_method()))
+		return (0);
+
+	SSL_CTX_set_verify(ctx, check_cert ? SSL_VERIFY_PEER : SSL_VERIFY_NONE,
+			   NULL);
+	return (1);
 }
 
 int
@@ -331,6 +336,8 @@ srfs_sock_connect(char *server)
 	SSL_set_fd(ssl, fd);
 
 	if (SSL_connect(ssl) <= 0) {
+		printf("srfs: connect: %s\n",
+		       ERR_error_string(ERR_get_error(), NULL));
 		srfs_sock_close();
 		return (0);
 	}

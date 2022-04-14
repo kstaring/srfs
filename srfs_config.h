@@ -31,7 +31,8 @@
 #define _SRFS_CONFIG_H
 
 #define SRFS_BASE_CONFIG_PATH "/etc/srfs"
-#define SRFS_CONFIG_FILE SRFS_BASE_CONFIG_PATH "/srfsd.conf"
+#define SRFS_CLIENT_CONFIG_FILE SRFS_BASE_CONFIG_PATH "/srfs.conf"
+#define SRFS_SERVER_CONFIG_FILE SRFS_BASE_CONFIG_PATH "/srfsd.conf"
 #define SRFS_EXPORTS_FILE SRFS_BASE_CONFIG_PATH "/exports"
 #define SRFS_CLIENT_KEYS_DIR SRFS_BASE_CONFIG_PATH "/srfs_client_keys.d"
 
@@ -47,10 +48,12 @@
 #define SRFS_AUTH_METHOD_SSH	(1 << 1)
 #define SRFS_AUTH_METHOD_PWD	(1 << 2)
 
-typedef struct srfs_server_config {
-	int allow_unknown_clients;
+typedef struct srfs_config {
+	int allow_insecure_connect;
 	int auth_methods;
-} srfs_server_config_t;
-extern srfs_server_config_t *server_config;
+} srfs_config_t;
+extern srfs_config_t *srfs_config;
+
+extern void srfs_config_init(char *path);
 
 #endif

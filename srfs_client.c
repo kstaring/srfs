@@ -89,6 +89,8 @@ srfs_client_init(void)
 	resp = srfs_iobuf_alloc(SRFS_IOBUFSZ);
 
 	srfs_usrgrp_init();
+
+	srfs_config_init(SRFS_CLIENT_CONFIG_FILE);
 }
 
 size_t
@@ -313,10 +315,26 @@ srfs_client_user_login_path(char *subdir, uint8_t auth_type)
 	struct stat st;
 	char *home;
 	char *sign;
+	char *cm;
+	int m;
 
 	home = srfs_homebyuid(usrctx.uid);
-
 	srfs_client_user_from_config(home, subdir, user);
+
+	if (auth_type == SRFS_AUTH_SRFS) {
+		m = SRFS_AUTH_METHOD_SRFS;
+		cm = "auth_srfs";
+	} else {
+		m = SRFS_AUTH_METHOD_SSH;
+		cm = "auth_ssh";
+	}
+	if (!(srfs_config->auth_methods & m)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "user %s failed "
+		       "authentication: auth_method `%s' disabled "
+		       "by srfs.conf", user, cm);
+		return (0);
+	}
+
 	len = snprintf(path, MAXPATHLEN + 1, "%s/%s/id_rsa", home, subdir);
 	if (len >= MAXPATHLEN + 1)
 		return (0);
@@ -356,6 +374,12 @@ srfs_client_user_login_pwd(uid_t uid, char *rmtuser, char *pass)
 
 	if (!(name = srfs_namebyuid(uid))) {
 		errno = ENOENT;
+		return (0);
+	}
+	if (!(srfs_config->auth_methods & SRFS_AUTH_METHOD_PWD)) {
+		syslog(LOG_AUTH | LOG_NOTICE, "user %s failed "
+		       "authentication: auth_method `password' disabled "
+		       "by srfs.conf", rmtuser);
 		return (0);
 	}
 	if (rmtuser && strcmp(name, rmtuser) != 0)

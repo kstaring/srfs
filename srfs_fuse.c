@@ -51,6 +51,7 @@
 #include "srfs_pki.h"
 #include "srfs_fuse.h"
 #include "srfs_sock.h"
+#include "srfs_config.h"
 #include "srfs_client.h"
 #include "srfs_usrgrp.h"
 
@@ -571,6 +572,11 @@ srfs_auth_socket_open(char *server, char *mountpoint)
 	socklen_t len;
 	size_t n;
 
+	if (!(srfs_config->auth_methods & SRFS_AUTH_METHOD_PWD)) {
+		auth_fd = -1;
+		return;
+	}
+
 	len = sizeof(struct sockaddr_un);
 	bzero(&un, len);
 	un.sun_family = AF_UNIX;
@@ -623,10 +629,11 @@ main(int argc, char *argv[])
 	if (!serverpath || !mountpoint)
 		return srfs_usage();
 
-	if (!srfs_sock_client_init())
+	srfs_client_init();
+
+	if (!srfs_sock_client_init(srfs_config->allow_insecure_connect ? 0 : 1))
 		return (1);
 
-	srfs_client_init();
 	srfs_load_hostkeys();
 
 	srfs_auth_socket_open(serverpath, mountpoint);

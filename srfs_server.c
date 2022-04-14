@@ -98,8 +98,6 @@ static char *srfs_opcodes[] = {
 	"SRFS_UTIMENS"
 };
 
-srfs_server_config_t *server_config = NULL;
-
 static int srfs_get_path(srfs_iobuf_t *req, char *path);
 static int srfs_get_path_nonexistent(srfs_iobuf_t *req, char *path);
 
@@ -163,21 +161,14 @@ static srfs_export_t *exported = NULL;
 void
 srfs_server_init(void)
 {
-	srfs_server_config_t *cnf;
-
 	reqbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
 	respbuf = srfs_iobuf_alloc(SRFS_IOBUFSZ);
-
-	server_config = calloc(1, sizeof(srfs_server_config_t));
 
 	LIST_INIT(&file_cache);
 	LIST_INIT(&dir_cache);
 
 	srfs_usrgrp_init();
-
-	cnf = server_config;
-	cnf->allow_unknown_clients = 0;
-	cnf->auth_methods = SRFS_AUTH_METHOD_SRFS | SRFS_AUTH_METHOD_SSH;
+	srfs_config_init(SRFS_SERVER_CONFIG_FILE);
 }
 
 void
@@ -345,7 +336,7 @@ srfs_verify_user_srfs(char *usrname, char *buf, size_t sz)
 	char *home;
 	uid_t uid;
 
-	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_SRFS)) {
+	if (!(srfs_config->auth_methods & SRFS_AUTH_METHOD_SRFS)) {
 		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
 		       "authentication: auth_method `srfs_auth' disabled "
 		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
@@ -399,7 +390,7 @@ srfs_verify_user_ssh(char *usrname, char *buf, size_t sz)
 	char *home;
 	uid_t uid;
 
-	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_SSH)) {
+	if (!(srfs_config->auth_methods & SRFS_AUTH_METHOD_SSH)) {
 		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
 		       "authentication: auth_method `ssh_auth' disabled "
 		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
@@ -448,7 +439,7 @@ srfs_verify_user_ssh(char *usrname, char *buf, size_t sz)
 static int
 srfs_verify_user_pwd(char *usrname, char *passwd)
 {
-	if (!(server_config->auth_methods & SRFS_AUTH_METHOD_PWD)) {
+	if (!(srfs_config->auth_methods & SRFS_AUTH_METHOD_PWD)) {
 		syslog(LOG_AUTH | LOG_NOTICE, "%s: user %s failed "
 		       "authentication: auth_method `password' disabled "
 		       "by srfsd.conf", srfs_remote_ipstr(), usrname);
@@ -479,7 +470,7 @@ srfs_login(srfs_iobuf_t *req, srfs_iobuf_t *resp)
 
 	auth = srfs_iobuf_get8(req);
 
-	if (auth != SRFS_AUTH_HOST && !server_config->allow_unknown_clients &&
+	if (auth != SRFS_AUTH_HOST && !srfs_config->allow_insecure_connect &&
 	    !client_authenticated) {
 		syslog(LOG_AUTH | LOG_NOTICE, "%s: client did not "
 		       "authenticate with host key", srfs_remote_ipstr());
